@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 网关 Demo</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="container">
+    <header class="hero">
+      <h1>AI 网关观测台</h1>
+      <p>上传 PCAP、管理自建 AI 映射、查看实时指标。</p>
+    </header>
+
+    <section class="panel grid-two">
+      <form id="upload-form" class="card">
+        <h3>上传 PCAP 入库</h3>
+        <label>PCAP 文件<input type="file" name="file" accept=".pcap,.pcapng" required /></label>
+        <label>问答切分阈值 (s)<input type="number" name="gap" step="0.1" value="2.0" /></label>
+        <label>AI IP（可选）<input type="text" name="ai_ip" placeholder="例如 1.2.3.4" /></label>
+        <button type="submit">上传并分析</button>
+      </form>
+
+      <div class="card">
+        <h3>数据管理</h3>
+        <p>清空现有 entry 记录，不影响自建 AI 配置。</p>
+        <button id="clear-btn" class="danger">清空全部记录</button>
+        <p id="op-msg" class="hint"></p>
+      </div>
+    </section>
+
+    <section class="panel card">
+      <h3>自建 AI 配置（大类：自建AI）</h3>
+      <form id="cfg-form" class="inline-form">
+        <input name="name" placeholder="小类名称，如 小微助手" required />
+        <input name="server_ip" placeholder="服务端 IP，如 192.168.101.1" required />
+        <button type="submit">新增/覆盖</button>
+      </form>
+      <table id="cfg-table">
+        <thead><tr><th>ID</th><th>小类名称</th><th>服务端IP</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="summary" class="cards"></section>
+
+    <section class="panel card">
+      <h3>按大类统计</h3>
+      <table id="major-stats">
+        <thead><tr><th>大类</th><th>Entry数</th><th>输入Token</th><th>输出Token</th><th>Avg TTFB (ms)</th><th>Avg TTFT (ms)</th><th>Avg Latency (ms)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="panel card">
+      <h3>Entry 列表</h3>
+      <table id="entries">
+        <thead>
+          <tr>
+            <th>ID</th><th>大类</th><th>小类</th><th>开始时间(真实)</th><th>结束时间(真实)</th>
+            <th>开始时间(相对s)</th><th>TTFB (ms)</th><th>TTFT (ms)</th><th>Latency (ms)</th><th>TPOT (ms/token)</th>
+            <th>输入Token</th><th>输出Token</th><th>Flow</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script>
+    const msgEl = document.getElementById('op-msg');
+    const fmt = (v) => (v === null || v === undefined) ? '-' : Number(v).toFixed(1);
+    const esc = (s) => String(s ?? '');
+
+    function card(title, value){ return `<div class="stat-card"><h4>${title}</h4><p>${value}</p></div>`; }
+
+    async function loadConfigs(){
+      const res = await fetch('/api/self-hosted');
+      const data = await res.json();
+      document.querySelector('#cfg-table tbody').innerHTML = (data.items || []).map(c =>
+        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.server_ip)}</td><td><button data-del="${c.id}">删除</button></td></tr>`
+      ).join('');
+      document.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch(`/api/self-hosted/${btn.dataset.del}`, {method: 'DELETE'});
+          await loadConfigs();
+        }
+      });
+    }
+
+    async function refresh(){
+      const [statsRes, entriesRes] = await Promise.all([fetch('/api/stats'), fetch('/api/entries')]);
+      const stats = await statsRes.json();
+      const entries = await entriesRes.json();
+
+      document.getElementById('summary').innerHTML = [
+        card('总 Entry 数', stats.total_entries),
+        card('总输入 Token', stats.total_input_tokens),
+        card('总输出 Token', stats.total_output_tokens),
+        card('RPS (req/s)', fmt(stats.rps)),
+      ].join('');
+
+      document.querySelector('#major-stats tbody').innerHTML = (stats.major_stats || []).map(s =>
+        `<tr><td>${esc(s.category_major)}</td><td>${s.total_entries}</td><td>${s.total_input_tokens}</td><td>${s.total_output_tokens}</td><td>${fmt(s.avg_ttfb_ms)}</td><td>${fmt(s.avg_ttft_ms)}</td><td>${fmt(s.avg_latency_ms)}</td></tr>`
+      ).join('');
+
+      document.querySelector('#entries tbody').innerHTML = (entries.items || []).map(e =>
+        `<tr><td>${e.id}</td><td>${esc(e.category_major)}</td><td>${esc(e.category_minor)}</td><td>${esc(e.start_time_real)}</td><td>${esc(e.end_time_real)}</td><td>${fmt(e.start_time_rel_s)}</td><td>${fmt(e.ttfb_ms)}</td><td>${fmt(e.ttft_ms)}</td><td>${fmt(e.latency_ms)}</td><td>${fmt(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td>${esc(e.flow_key)}</td></tr>`
+      ).join('');
+    }
+
+    document.getElementById('upload-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      await fetch('/api/upload', {method: 'POST', body: form});
+      msgEl.textContent = '上传并分析完成。';
+      await refresh();
+    };
+
+    document.getElementById('clear-btn').onclick = async () => {
+      await fetch('/api/clear', {method: 'POST'});
+      msgEl.textContent = '历史记录已清空。';
+      await refresh();
+    };
+
+    document.getElementById('cfg-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      await fetch('/api/self-hosted', {method: 'POST', body: form});
+      e.target.reset();
+      await loadConfigs();
+    };
+
+    loadConfigs();
+    refresh();
+  </script>
+</body>
+</html>
