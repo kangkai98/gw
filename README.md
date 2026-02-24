@@ -1,44 +1,41 @@
-# AI 网关 Demo
+# AI 网关 Demo（网页上传 PCAP + 可视化）
 
-## 你现在可以这样用
+## 现在的使用方式
 
-命令行只负责拉起网页服务：
+命令行只负责启动服务：
 
 ```bash
 python -m ai_gateway_demo --port 8000
 ```
 
-然后在网页里完成：
+打开 `http://127.0.0.1:8000` 后可在网页完成：
 
 - 上传 pcap 并入库
-- 清除历史记录
-- 配置自建 AI（IP + 小类名称）
+- 清空历史 entry
+- 配置自建 AI 服务（IP + 小类名称）
 
-## 识别与分类规则
+## 指标定义（单位）
 
-每条 entry 包含：
+- 开始时间(真实)：`YYYY-MM-DD HH:MM:SS`
+- 结束时间(真实)：`YYYY-MM-DD HH:MM:SS`
+- 开始时间(相对)：`s`（相对 pcap 首包）
+- TTFB / TTFT / Latency：`ms`
+- TPOT：`ms/token`
+- 所有时间型数值保留 1 位小数
 
-- 大类：`三方AI` / `自建AI` / `实验AI`
-- 小类：
-  - 三方AI：如 `qwen api`、`豆包 app`（由 payload 关键词识别）
-  - 自建AI：来自网页配置（按服务端 IP 命中）
-  - 实验AI：未配置但被算法识别为 AI 流，从 payload 抽取小类文本
+## 分类规则
 
-## 时间与单位
+每条 entry 增加 `大类 + 小类`：
 
-每条 entry 同时保存：
+1. **自建AI**：命中网页中配置的服务端 IP，`小类=你配置的名称`
+2. **三方AI**：命中关键词规则（例如 qwen api、doubao app、openai api）
+3. **实验AI**：未配置且被算法识别为 AI 流，小类从 payload 中提取 host/sni/关键词
 
-- 真实开始时间：`start_time_dt`（年月日 时分秒毫秒）
-- 真实结束时间：`end_time_dt`
-- 相对开始时间：`start_time_s`（相对 pcap 起点，单位 s）
-- TTFB / TTFT / Latency：单位 `ms`
-- TPOT：单位 `ms/token`
+## 快速启动
 
-以上时间指标统一保留 **1 位小数**（相对开始时间也是 1 位小数）。
-
-## 页面功能
-
-- 设计化控制台 UI
-- 总览卡片：总 entry、总 token、RPS
-- 按大类统计
-- Entry 明细表（含真实开始/结束时间 + 相对开始时间）
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m ai_gateway_demo --port 8000
+```

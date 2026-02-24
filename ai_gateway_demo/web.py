@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .db import (
+    add_self_hosted,
     clear_entries,
-    delete_self_hosted_config,
+    delete_self_hosted,
     get_stats,
     init_db,
-    insert_entries,
+    insert_entry,
     list_entries,
-    list_self_hosted_configs,
-    upsert_self_hosted_config,
+    list_self_hosted,
 )
 from .parser import parse_pcap_to_entries
 
@@ -23,10 +23,9 @@ app = FastAPI(title="AI Gateway Demo")
 app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
 templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
-
-@app.on_event("startup")
-def startup_init() -> None:
-    init_db()
+UPLOAD_PATH = Path("uploads")
+UPLOAD_PATH.mkdir(exist_ok=True)
+init_db()
 
 
 @app.get("/api/entries")
@@ -39,53 +38,45 @@ def api_stats():
     return get_stats()
 
 
-@app.get("/api/self-hosted-configs")
-def api_list_configs():
-    return {"items": list_self_hosted_configs()}
-
-
-@app.post("/api/self-hosted-configs")
-def api_add_config(ip: str = Form(...), label: str = Form(...)):
-    if not ip.strip() or not label.strip():
-        raise HTTPException(status_code=400, detail="ip and label are required")
-    upsert_self_hosted_config(ip, label)
-    return {"ok": True}
-
-
-@app.delete("/api/self-hosted-configs/{config_id}")
-def api_del_config(config_id: int):
-    delete_self_hosted_config(config_id)
-    return {"ok": True}
-
-
-@app.post("/api/upload-pcap")
-async def api_upload_pcap(
+@app.post("/api/upload")
+async def api_upload(
     file: UploadFile = File(...),
     gap: float = Form(2.0),
-    ai_ip: str = Form(""),
+    ai_ip: str | None = Form(None),
 ):
-    suffix = Path(file.filename or "upload.pcap").suffix or ".pcap"
-    tmp_path = Path(f"/tmp/ai_gateway_upload{suffix}")
+    filename = file.filename or "upload.pcap"
+    local_file = UPLOAD_PATH / filename
+    content = await file.read()
+    local_file.write_bytes(content)
 
-    data = await file.read()
-    tmp_path.write_bytes(data)
-    try:
-        entries = parse_pcap_to_entries(
-            pcap_path=tmp_path,
-            gap_threshold=gap,
-            self_hosted_configs=list_self_hosted_configs(),
-            ai_ip=(ai_ip.strip() or None),
-        )
-        insert_entries(entries)
-        return {"ok": True, "inserted": len(entries)}
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    configs = list_self_hosted()
+    entries = parse_pcap_to_entries(local_file, gap_threshold=gap, self_hosted_configs=configs, ai_ip=ai_ip)
+    for e in entries:
+        insert_entry(e)
+
+    return {"inserted": len(entries)}
 
 
-@app.post("/api/clear-entries")
-def api_clear_entries():
+@app.post("/api/clear")
+def api_clear():
     clear_entries()
+    return {"ok": True}
+
+
+@app.get("/api/self-hosted")
+def api_self_hosted_list():
+    return {"items": list_self_hosted()}
+
+
+@app.post("/api/self-hosted")
+def api_self_hosted_add(name: str = Form(...), server_ip: str = Form(...)):
+    add_self_hosted(name=name, server_ip=server_ip)
+    return {"ok": True}
+
+
+@app.delete("/api/self-hosted/{service_id}")
+def api_self_hosted_delete(service_id: int):
+    delete_self_hosted(service_id)
     return {"ok": True}
 
 
