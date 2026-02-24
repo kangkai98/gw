@@ -3,36 +3,115 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI 网关 Demo</title>
+  <title>AI 网关控制台</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <main>
-    <h1>AI 网关 Entry 面板</h1>
+  <div class="bg"></div>
+  <main class="container">
+    <header class="hero">
+      <h1>AI 网关控制台</h1>
+      <p>上传 PCAP、自动识别 AI 流、入库分析与可视化。</p>
+    </header>
+
+    <section class="panel actions">
+      <div>
+        <h2>上传 PCAP</h2>
+        <form id="uploadForm" class="grid-form">
+          <input type="file" name="file" accept=".pcap,.pcapng" required />
+          <input type="number" name="gap" step="0.1" min="0.1" value="2.0" placeholder="gap 秒" />
+          <input type="text" name="ai_ip" placeholder="可选：AI IP" />
+          <button type="submit">上传并入库</button>
+        </form>
+      </div>
+      <div>
+        <h2>数据操作</h2>
+        <button id="clearBtn" class="danger">清除历史 Entry</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>自建 AI 配置</h2>
+      <form id="cfgForm" class="grid-form">
+        <input type="text" name="label" placeholder="小类名称，如：小微助手" required />
+        <input type="text" name="ip" placeholder="服务端 IP，如：192.168.101.1" required />
+        <button type="submit">添加/更新</button>
+      </form>
+      <table id="cfgTable">
+        <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
 
     <section id="summary" class="cards"></section>
 
-    <h2>按来源统计</h2>
-    <table id="source-stats">
-      <thead><tr><th>来源</th><th>Entry 数</th><th>输入 Token</th><th>输出 Token</th><th>Avg TTFB (s)</th><th>Avg TTFT (s)</th><th>Avg Latency (s)</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <section class="panel">
+      <h2>按大类统计</h2>
+      <table id="majorStats">
+        <thead><tr><th>大类</th><th>Entry 数</th><th>输入 Token</th><th>输出 Token</th><th>Avg TTFB (ms)</th><th>Avg TTFT (ms)</th><th>Avg Latency (ms)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
 
-    <h2>Entry 列表</h2>
-    <table id="entries">
-      <thead><tr><th>ID</th><th>来源</th><th>开始时间(相对 pcap 起点, s)</th><th>TTFB (s)</th><th>TTFT (s)</th><th>Latency (s)</th><th>TPOT (s/token)</th><th>输入Token</th><th>输出Token</th><th>Flow</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <section class="panel">
+      <h2>Entry 列表</h2>
+      <table id="entries">
+        <thead>
+          <tr>
+            <th>ID</th><th>大类</th><th>小类</th><th>开始时间</th><th>结束时间</th>
+            <th>相对开始(s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
+            <th>输入Token</th><th>输出Token</th><th>Flow</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
   </main>
 
   <script>
+    const fmt = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
+
     function card(title, value){
       return `<div class="card"><h3>${title}</h3><p>${value}</p></div>`;
     }
 
-    function sec(v){
-      if (v === null || v === undefined) return '-';
-      return Number(v).toFixed(3);
+    async function uploadPcap(e){
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/upload-pcap', { method: 'POST', body: fd });
+      if (!res.ok) { alert('上传失败'); return; }
+      const data = await res.json();
+      alert(`导入成功，新增 ${data.inserted} 条 entry`);
+      await refresh();
+    }
+
+    async function clearEntries(){
+      if (!confirm('确认清空历史 Entry？')) return;
+      await fetch('/api/clear-entries', { method: 'POST' });
+      await refresh();
+    }
+
+    async function saveConfig(e){
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const res = await fetch('/api/self-hosted-configs', { method: 'POST', body: fd });
+      if (!res.ok) { alert('配置保存失败'); return; }
+      e.target.reset();
+      await refreshConfigs();
+      await refresh();
+    }
+
+    async function deleteConfig(id){
+      await fetch(`/api/self-hosted-configs/${id}`, { method: 'DELETE' });
+      await refreshConfigs();
+    }
+
+    async function refreshConfigs(){
+      const r = await fetch('/api/self-hosted-configs');
+      const data = await r.json();
+      document.querySelector('#cfgTable tbody').innerHTML = (data.items || []).map(c =>
+        `<tr><td>${c.id}</td><td>${c.label}</td><td>${c.ip}</td><td><button onclick="deleteConfig(${c.id})">删除</button></td></tr>`
+      ).join('');
     }
 
     async function refresh(){
@@ -44,22 +123,26 @@
       const entries = await entriesRes.json();
 
       document.getElementById('summary').innerHTML = [
-        card('总 Entry 数', stats.total_entries),
+        card('总 Entry', stats.total_entries),
         card('总输入 Token', stats.total_input_tokens),
         card('总输出 Token', stats.total_output_tokens),
         card('RPS (req/s)', stats.rps),
       ].join('');
 
-      const sourceRows = (stats.source_stats || []).map(s =>
-        `<tr><td>${s.source}</td><td>${s.total_entries}</td><td>${s.total_input_tokens}</td><td>${s.total_output_tokens}</td><td>${sec(s.avg_ttfb)}</td><td>${sec(s.avg_ttft)}</td><td>${sec(s.avg_latency)}</td></tr>`
+      document.querySelector('#majorStats tbody').innerHTML = (stats.by_major || []).map(s =>
+        `<tr><td>${s.source_major}</td><td>${s.total_entries}</td><td>${s.total_input_tokens}</td><td>${s.total_output_tokens}</td><td>${fmt(s.avg_ttfb_ms)}</td><td>${fmt(s.avg_ttft_ms)}</td><td>${fmt(s.avg_latency_ms)}</td></tr>`
       ).join('');
-      document.querySelector('#source-stats tbody').innerHTML = sourceRows;
 
-      const entryRows = (entries.items || []).map(e =>
-        `<tr><td>${e.id}</td><td>${e.source}</td><td>${sec(e.start_time)}</td><td>${sec(e.ttfb)}</td><td>${sec(e.ttft)}</td><td>${sec(e.latency)}</td><td>${sec(e.tpot)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td>${e.flow_key}</td></tr>`
+      document.querySelector('#entries tbody').innerHTML = (entries.items || []).map(e =>
+        `<tr><td>${e.id}</td><td>${e.source_major}</td><td>${e.source_minor}</td><td>${e.start_time_dt}</td><td>${e.end_time_dt || '-'}</td><td>${fmt(e.start_time_s)}</td><td>${fmt(e.ttfb_ms)}</td><td>${fmt(e.ttft_ms)}</td><td>${fmt(e.latency_ms)}</td><td>${fmt(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td>${e.flow_key}</td></tr>`
       ).join('');
-      document.querySelector('#entries tbody').innerHTML = entryRows;
     }
+
+    document.getElementById('uploadForm').addEventListener('submit', uploadPcap);
+    document.getElementById('cfgForm').addEventListener('submit', saveConfig);
+    document.getElementById('clearBtn').addEventListener('click', clearEntries);
+
+    refreshConfigs();
     refresh();
   </script>
 </body>

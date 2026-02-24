@@ -3,18 +3,27 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from scapy.all import IP, TCP, Raw, rdpcap
 
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
-SOURCE_KEYWORDS: dict[str, tuple[str, ...]] = {
-    "qwen": ("qwen", "dashscope", "aliyun"),
-    "doubao": ("doubao", "volcengine", "ark.cn-beijing"),
-    "openai": ("openai", "chatgpt"),
-    "experimental": ("exp", "test", "lab"),
+
+THIRD_PARTY_HINTS: dict[str, tuple[str, ...]] = {
+    "qwen api": ("qwen", "dashscope", "aliyun"),
+    "豆包 app": ("doubao", "volcengine", "ark"),
+    "openai api": ("openai", "chatgpt", "gpt-"),
 }
+AI_TRAFFIC_HINTS = (
+    "prompt",
+    "messages",
+    "assistant",
+    "completion",
+    "stream",
+    "data:",
+)
 
 
 @dataclass
@@ -63,12 +72,21 @@ def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
     return groups
 
 
-def infer_source(flow_packets: list[PacketMeta], fallback_server_ip: str) -> str:
-    text = "\n".join(pkt.payload.lower() for pkt in flow_packets if pkt.payload)
-    for source, keys in SOURCE_KEYWORDS.items():
-        if any(k in text for k in keys):
-            return source
-    return f"auto:{fallback_server_ip}"
+def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
+    byte_by_src: dict[str, int] = defaultdict(int)
+    for pkt in flow_packets:
+        byte_by_src[pkt.src] += len(pkt.payload)
+    client = min(byte_by_src, key=lambda ip: byte_by_src[ip])
+    server_candidates = [ip for ip in byte_by_src if ip != client]
+    server = server_candidates[0] if server_candidates else client
+    return client, server
+
+
+def score_flow_for_ai(flow_packets: list[PacketMeta]) -> int:
+    text = "\n".join(p.payload.lower() for p in flow_packets if p.payload)
+    bytes_sum = sum(len(p.payload) for p in flow_packets)
+    hint_hits = sum(1 for h in AI_TRAFFIC_HINTS if h in text)
+    return hint_hits * 1000 + bytes_sum
 
 
 def pick_ai_flow(flows: dict[str, list[PacketMeta]], ai_ip: str | None = None) -> tuple[str, list[PacketMeta]]:
@@ -78,39 +96,34 @@ def pick_ai_flow(flows: dict[str, list[PacketMeta]], ai_ip: str | None = None) -
                 return key, items
         raise ValueError(f"No flow matches ai_ip={ai_ip}")
 
-    # 自动策略：优先匹配 host/sni 关键词，否则选择 payload 字节最大的流
-    best_keyword_key = ""
-    best_keyword_hits = 0
-    best_fallback_key = ""
-    best_fallback_score = -1
-
-    all_keywords = [kw for kws in SOURCE_KEYWORDS.values() for kw in kws]
+    best_key = ""
+    best_score = -1
     for key, items in flows.items():
-        joined = "\n".join(pkt.payload.lower() for pkt in items if pkt.payload)
-        hits = sum(1 for kw in all_keywords if kw in joined)
-        if hits > best_keyword_hits:
-            best_keyword_hits = hits
-            best_keyword_key = key
-
-        bytes_sum = sum(len(pkt.payload) for pkt in items)
-        if bytes_sum > best_fallback_score:
-            best_fallback_key = key
-            best_fallback_score = bytes_sum
-
-    chosen_key = best_keyword_key if best_keyword_hits > 0 else best_fallback_key
-    if not chosen_key:
+        score = score_flow_for_ai(items)
+        if score > best_score:
+            best_key = key
+            best_score = score
+    if not best_key:
         raise ValueError("No TCP flow found in pcap")
-    return chosen_key, flows[chosen_key]
+    return best_key, flows[best_key]
 
 
-def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
-    byte_by_src: dict[str, int] = defaultdict(int)
-    for pkt in flow_packets:
-        byte_by_src[pkt.src] += len(pkt.payload)
-    client = min(byte_by_src, key=lambda ip: byte_by_src[ip])
-    server_candidates = [ip for ip in byte_by_src if ip != client]
-    server = server_candidates[0] if server_candidates else client
-    return client, server
+def classify_source(
+    flow_packets: list[PacketMeta],
+    server_ip: str,
+    self_hosted_configs: list[dict[str, str]],
+) -> tuple[str, str]:
+    for cfg in self_hosted_configs:
+        if server_ip == cfg["ip"]:
+            return "自建AI", cfg["label"]
+
+    text = "\n".join(p.payload.lower() for p in flow_packets if p.payload)
+    for minor, hints in THIRD_PARTY_HINTS.items():
+        if any(h in text for h in hints):
+            return "三方AI", minor
+
+    first_line = next((p.payload.strip().splitlines()[0] for p in flow_packets if p.payload.strip()), "unknown")
+    return "实验AI", first_line[:40]
 
 
 def split_entries(flow_packets: list[PacketMeta], gap_threshold: float) -> list[list[PacketMeta]]:
@@ -125,13 +138,20 @@ def split_entries(flow_packets: list[PacketMeta], gap_threshold: float) -> list[
     return entries
 
 
+def to_iso(ts: float | None) -> str | None:
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 def build_entry_metrics(
     entry_packets: list[PacketMeta],
     client_ip: str,
     server_ip: str,
-    source: str,
+    source_major: str,
+    source_minor: str,
     flow_key: str,
-    base_ts: float,
+    pcap_base_ts: float,
 ) -> dict:
     up = [p for p in entry_packets if p.src == client_ip]
     down = [p for p in entry_packets if p.src == server_ip]
@@ -140,30 +160,35 @@ def build_entry_metrics(
     start_ts = start_pkt.ts
 
     first_down = next((p for p in down if p.payload), down[0] if down else None)
-    ttfb = (first_down.ts - start_ts) if first_down else None
+    ttfb_ms = ((first_down.ts - start_ts) * 1000.0) if first_down else None
 
     first_token_pkt = next((p for p in down if count_tokens(p.payload) > 0), first_down)
-    ttft = (first_token_pkt.ts - start_ts) if first_token_pkt else None
+    ttft_ms = ((first_token_pkt.ts - start_ts) * 1000.0) if first_token_pkt else None
 
     last_down = down[-1] if down else None
-    latency = (last_down.ts - start_ts) if last_down else None
+    latency_ms = ((last_down.ts - start_ts) * 1000.0) if last_down else None
 
     input_tokens = sum(count_tokens(p.payload) for p in up)
     output_tokens = sum(count_tokens(p.payload) for p in down)
 
-    if latency is not None and ttft is not None and output_tokens > 0:
-        tpot = max((latency - ttft), 0) / output_tokens
+    if latency_ms is not None and ttft_ms is not None and output_tokens > 0:
+        tpot_ms_per_token = max((latency_ms - ttft_ms), 0) / output_tokens
     else:
-        tpot = None
+        tpot_ms_per_token = None
+
+    end_ts = (start_ts + latency_ms / 1000.0) if latency_ms is not None else None
 
     return {
-        "source": source,
+        "source_major": source_major,
+        "source_minor": source_minor,
         "flow_key": flow_key,
-        "start_time": round(start_ts - base_ts, 6),
-        "ttfb": round(ttfb, 6) if ttfb is not None else None,
-        "ttft": round(ttft, 6) if ttft is not None else None,
-        "latency": round(latency, 6) if latency is not None else None,
-        "tpot": round(tpot, 6) if tpot is not None else None,
+        "start_time_s": round(start_ts - pcap_base_ts, 1),
+        "start_time_dt": to_iso(start_ts),
+        "end_time_dt": to_iso(end_ts),
+        "ttfb_ms": round(ttfb_ms, 1) if ttfb_ms is not None else None,
+        "ttft_ms": round(ttft_ms, 1) if ttft_ms is not None else None,
+        "latency_ms": round(latency_ms, 1) if latency_ms is not None else None,
+        "tpot_ms_per_token": round(tpot_ms_per_token, 1) if tpot_ms_per_token is not None else None,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
@@ -171,17 +196,30 @@ def build_entry_metrics(
 
 def parse_pcap_to_entries(
     pcap_path: Path,
-    source: str | None,
     gap_threshold: float,
+    self_hosted_configs: list[dict[str, str]],
     ai_ip: str | None = None,
 ) -> list[dict]:
     pkts = extract_packets(pcap_path)
     if not pkts:
         return []
+
     flows = group_bi_flows(pkts)
     flow_key, ai_flow_packets = pick_ai_flow(flows, ai_ip=ai_ip)
     client_ip, server_ip = infer_direction(ai_flow_packets)
-    resolved_source = source or infer_source(ai_flow_packets, fallback_server_ip=server_ip)
-    base_ts = pkts[0].ts
+    source_major, source_minor = classify_source(ai_flow_packets, server_ip, self_hosted_configs)
+
     chunks = split_entries(ai_flow_packets, gap_threshold=gap_threshold)
-    return [build_entry_metrics(c, client_ip, server_ip, resolved_source, flow_key, base_ts) for c in chunks if c]
+    return [
+        build_entry_metrics(
+            c,
+            client_ip,
+            server_ip,
+            source_major,
+            source_minor,
+            flow_key,
+            pkts[0].ts,
+        )
+        for c in chunks
+        if c
+    ]

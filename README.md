@@ -1,52 +1,44 @@
-# AI 网关 Demo（PCAP -> 指标入库 -> Web 展示）
+# AI 网关 Demo
 
-这个 demo 现在是**一条命令完成**：
+## 你现在可以这样用
 
-1. 指定 pcap 文件。
-2. 自动识别 AI 流（可选 `--ai-ip` 覆盖）。
-3. 按 `--gap` 切分问答 entry。
-4. 计算指标并写入 SQLite。
-5. 自动拉起 Web 服务查看结果。
-
-## 支持的指标（均带单位）
-
-- 开始时间：相对 pcap 起点时间（s）
-- TTFB（s）
-- TTFT（s）
-- Latency（s）
-- TPOT（s/token）
-- 输入/输出 token 数（count）
-
-## 自动识别说明
-
-- AI 流识别：
-  - 若传入 `--ai-ip`，优先使用该 IP 匹配流。
-  - 若未传入，先用 payload 中的 host/sni 关键词命中（如 qwen/dashscope、doubao/volcengine 等）；
-  - 若仍无法命中，回退为 payload 字节最多的流。
-- 来源识别：
-  - 若传入 `--source`，直接使用；
-  - 若未传入，按关键词自动识别；识别不到则标记 `auto:<server_ip>`。
-
-## 快速运行
+命令行只负责拉起网页服务：
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# 一条命令：导入 + 启动服务
-python -m ai_gateway_demo --pcap sample_ai.pcap --gap 2 --port 8000
+python -m ai_gateway_demo --port 8000
 ```
 
-可选参数：
+然后在网页里完成：
 
-- `--source`：手工指定来源（可选）
-- `--ai-ip`：手工指定 AI 服务器 IP（可选）
-- `--gap`：问答切分阈值，默认 2 秒
+- 上传 pcap 并入库
+- 清除历史记录
+- 配置自建 AI（IP + 小类名称）
 
-打开 `http://127.0.0.1:8000`。
+## 识别与分类规则
 
-## 数据库
+每条 entry 包含：
 
-- SQLite 文件：`ai_gateway_demo.db`
-- 表：`entries`
+- 大类：`三方AI` / `自建AI` / `实验AI`
+- 小类：
+  - 三方AI：如 `qwen api`、`豆包 app`（由 payload 关键词识别）
+  - 自建AI：来自网页配置（按服务端 IP 命中）
+  - 实验AI：未配置但被算法识别为 AI 流，从 payload 抽取小类文本
+
+## 时间与单位
+
+每条 entry 同时保存：
+
+- 真实开始时间：`start_time_dt`（年月日 时分秒毫秒）
+- 真实结束时间：`end_time_dt`
+- 相对开始时间：`start_time_s`（相对 pcap 起点，单位 s）
+- TTFB / TTFT / Latency：单位 `ms`
+- TPOT：单位 `ms/token`
+
+以上时间指标统一保留 **1 位小数**（相对开始时间也是 1 位小数）。
+
+## 页面功能
+
+- 设计化控制台 UI
+- 总览卡片：总 entry、总 token、RPS
+- 按大类统计
+- Entry 明细表（含真实开始/结束时间 + 相对开始时间）

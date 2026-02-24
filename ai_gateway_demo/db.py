@@ -6,6 +6,23 @@ from typing import Any
 
 DB_PATH = Path("ai_gateway_demo.db")
 
+ENTRY_COLUMNS = {
+    "id",
+    "source_major",
+    "source_minor",
+    "flow_key",
+    "start_time_s",
+    "start_time_dt",
+    "end_time_dt",
+    "ttfb_ms",
+    "ttft_ms",
+    "latency_ms",
+    "tpot_ms_per_token",
+    "input_tokens",
+    "output_tokens",
+    "created_at",
+}
+
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -13,53 +30,98 @@ def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _create_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_major TEXT NOT NULL,
+            source_minor TEXT NOT NULL,
+            flow_key TEXT NOT NULL,
+            start_time_s REAL NOT NULL,
+            start_time_dt TEXT NOT NULL,
+            end_time_dt TEXT,
+            ttfb_ms REAL,
+            ttft_ms REAL,
+            latency_ms REAL,
+            tpot_ms_per_token REAL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS self_hosted_configs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
-        conn.execute(
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='entries'"
+        ).fetchone()
+        if exists:
+            cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(entries)").fetchall()
+            }
+            if not ENTRY_COLUMNS.issubset(cols):
+                conn.execute("DROP TABLE entries")
+        _create_tables(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_entries(entries: list[dict[str, Any]], db_path: Path = DB_PATH) -> None:
+    if not entries:
+        return
+    conn = get_conn(db_path)
+    try:
+        conn.executemany(
             """
-            CREATE TABLE IF NOT EXISTS entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source TEXT NOT NULL,
-                flow_key TEXT NOT NULL,
-                start_time REAL NOT NULL,
-                ttfb REAL,
-                ttft REAL,
-                latency REAL,
-                tpot REAL,
-                input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-            """
+            INSERT INTO entries (
+                source_major, source_minor, flow_key, start_time_s, start_time_dt,
+                end_time_dt, ttfb_ms, ttft_ms, latency_ms, tpot_ms_per_token,
+                input_tokens, output_tokens
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    e["source_major"],
+                    e["source_minor"],
+                    e["flow_key"],
+                    e["start_time_s"],
+                    e["start_time_dt"],
+                    e["end_time_dt"],
+                    e["ttfb_ms"],
+                    e["ttft_ms"],
+                    e["latency_ms"],
+                    e["tpot_ms_per_token"],
+                    e["input_tokens"],
+                    e["output_tokens"],
+                )
+                for e in entries
+            ],
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> None:
+def clear_entries(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
-        conn.execute(
-            """
-            INSERT INTO entries (
-                source, flow_key, start_time, ttfb, ttft,
-                latency, tpot, input_tokens, output_tokens
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                entry["source"],
-                entry["flow_key"],
-                entry["start_time"],
-                entry["ttfb"],
-                entry["ttft"],
-                entry["latency"],
-                entry["tpot"],
-                entry["input_tokens"],
-                entry["output_tokens"],
-            ),
-        )
+        conn.execute("DELETE FROM entries")
         conn.commit()
     finally:
         conn.close()
@@ -69,7 +131,43 @@ def list_entries(db_path: Path = DB_PATH) -> list[dict[str, Any]]:
     conn = get_conn(db_path)
     try:
         rows = conn.execute("SELECT * FROM entries ORDER BY id DESC").fetchall()
-        return [dict(row) for row in rows]
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_self_hosted_configs(db_path: Path = DB_PATH) -> list[dict[str, Any]]:
+    conn = get_conn(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT id, ip, label, created_at FROM self_hosted_configs ORDER BY id DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def upsert_self_hosted_config(ip: str, label: str, db_path: Path = DB_PATH) -> None:
+    conn = get_conn(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO self_hosted_configs (ip, label)
+            VALUES (?, ?)
+            ON CONFLICT(ip) DO UPDATE SET label=excluded.label
+            """,
+            (ip.strip(), label.strip()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_self_hosted_config(config_id: int, db_path: Path = DB_PATH) -> None:
+    conn = get_conn(db_path)
+    try:
+        conn.execute("DELETE FROM self_hosted_configs WHERE id=?", (config_id,))
+        conn.commit()
     finally:
         conn.close()
 
@@ -83,38 +181,38 @@ def get_stats(db_path: Path = DB_PATH) -> dict[str, Any]:
                 COUNT(*) AS total_entries,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-                MIN(start_time) AS min_start,
-                MAX(start_time + COALESCE(latency, 0)) AS max_end
+                MIN(start_time_s) AS min_start,
+                MAX(start_time_s + COALESCE(latency_ms, 0)/1000.0) AS max_end
             FROM entries
             """
         ).fetchone()
-        source_stats_rows = conn.execute(
+        by_major = conn.execute(
             """
             SELECT
-                source,
+                source_major,
                 COUNT(*) AS total_entries,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
                 COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-                AVG(ttfb) AS avg_ttfb,
-                AVG(ttft) AS avg_ttft,
-                AVG(latency) AS avg_latency
+                AVG(ttfb_ms) AS avg_ttfb_ms,
+                AVG(ttft_ms) AS avg_ttft_ms,
+                AVG(latency_ms) AS avg_latency_ms
             FROM entries
-            GROUP BY source
+            GROUP BY source_major
             ORDER BY total_entries DESC
             """
         ).fetchall()
 
         min_start = totals["min_start"]
         max_end = totals["max_end"]
-        duration = (max_end - min_start) if (min_start is not None and max_end is not None) else 0
-        rps = (totals["total_entries"] / duration) if duration and duration > 0 else 0
+        duration_s = (max_end - min_start) if (min_start is not None and max_end is not None) else 0
+        rps = (totals["total_entries"] / duration_s) if duration_s and duration_s > 0 else 0
 
         return {
             "total_entries": totals["total_entries"],
             "total_input_tokens": totals["total_input_tokens"],
             "total_output_tokens": totals["total_output_tokens"],
-            "rps": round(rps, 4),
-            "source_stats": [dict(row) for row in source_stats_rows],
+            "rps": round(rps, 2),
+            "by_major": [dict(r) for r in by_major],
         }
     finally:
         conn.close()
