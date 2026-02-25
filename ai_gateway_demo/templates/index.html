@@ -12,7 +12,7 @@
   <main class="container">
     <header class="hero glass">
       <h1>AI 网关观测台</h1>
-      <p>上传 PCAP、管理自建 AI、查看统计图表。</p>
+      <p>上传 PCAP、管理自建 AI、筛选并查看统计图表。</p>
     </header>
 
     <section class="cards">
@@ -26,11 +26,11 @@
       <section class="glass panel">
         <h2>上传抓包文件</h2>
         <form id="uploadForm">
-          <label class="file-label" aria-label="PCAP 文件">
-            <input name="file" type="file" accept=".pcap,.pcapng" required />
-            <span class="file-btn">选择抓包文件</span>
+          <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required hidden />
+          <div class="file-picker-row">
+            <button type="button" id="pickFileBtn" class="file-btn" aria-label="选择抓包文件">选择文件</button>
             <span id="fileName" class="file-name">未选择文件</span>
-          </label>
+          </div>
           <div class="actions">
             <button aria-label="上传并分析" type="submit">上传并分析</button>
             <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
@@ -53,6 +53,33 @@
       </section>
     </section>
 
+    <section class="glass panel filter-panel">
+      <h2>筛选条件</h2>
+      <form id="filterForm" class="filter-form">
+        <div>
+          <label for="fromTime">开始时间（从）</label>
+          <input id="fromTime" type="datetime-local" aria-label="筛选开始时间" />
+        </div>
+        <div>
+          <label for="toTime">开始时间（到）</label>
+          <input id="toTime" type="datetime-local" aria-label="筛选结束时间" />
+        </div>
+        <div>
+          <label for="majorFilter">AI 大类</label>
+          <select id="majorFilter" aria-label="筛选AI大类">
+            <option value="all">全部</option>
+            <option value="三方AI">三方AI</option>
+            <option value="自建AI">自建AI</option>
+            <option value="实验AI">实验AI</option>
+          </select>
+        </div>
+        <div class="filter-actions">
+          <button type="submit" aria-label="应用筛选">应用筛选</button>
+          <button id="resetFilter" type="button" aria-label="重置筛选" class="ghost-btn">重置</button>
+        </div>
+      </form>
+    </section>
+
     <section class="grid-two">
       <section class="glass panel chart-panel">
         <h2>AI 类别分布</h2>
@@ -70,8 +97,8 @@
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>大类</th><th>小类</th><th>流IP</th><th>开始时间(真实)</th>
-            <th>开始时间(相对s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
+            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Latency(s)</th>
+            <th>大类</th><th>小类</th><th>流IP</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th>
             <th>输入</th><th>输出</th>
           </tr>
         </thead>
@@ -85,7 +112,8 @@
   <script>
     let pieChart = null;
     let barChart = null;
-    const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
+    let allEntries = [];
+    const num = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(1));
 
     function flowIps(flowKey) {
       if (!flowKey || !flowKey.includes('-')) return '-';
@@ -95,26 +123,112 @@
       return `${ip1} ↔ ${ip2}`;
     }
 
+    function parseLocalDate(s) {
+      if (!s) return null;
+      const t = new Date(s.replace(' ', 'T'));
+      return Number.isNaN(t.getTime()) ? null : t;
+    }
+
+    function aggregateFromEntries(entries) {
+      const byMajor = new Map();
+      for (const e of entries) {
+        const major = e.category_major || '未知';
+        if (!byMajor.has(major)) {
+          byMajor.set(major, {
+            category_major: major,
+            total_entries: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            sum_ttfb: 0,
+            sum_ttft: 0,
+            sum_latency: 0,
+            cnt_ttfb: 0,
+            cnt_ttft: 0,
+            cnt_latency: 0,
+          });
+        }
+        const row = byMajor.get(major);
+        row.total_entries += 1;
+        row.total_input_tokens += Number(e.input_tokens || 0);
+        row.total_output_tokens += Number(e.output_tokens || 0);
+        if (e.ttfb_ms !== null && e.ttfb_ms !== undefined) { row.sum_ttfb += Number(e.ttfb_ms); row.cnt_ttfb += 1; }
+        if (e.ttft_ms !== null && e.ttft_ms !== undefined) { row.sum_ttft += Number(e.ttft_ms); row.cnt_ttft += 1; }
+        if (e.latency_ms !== null && e.latency_ms !== undefined) { row.sum_latency += Number(e.latency_ms); row.cnt_latency += 1; }
+      }
+
+      const major_stats = Array.from(byMajor.values()).map(r => ({
+        category_major: r.category_major,
+        total_entries: r.total_entries,
+        total_input_tokens: r.total_input_tokens,
+        total_output_tokens: r.total_output_tokens,
+        avg_ttfb_ms: r.cnt_ttfb ? r.sum_ttfb / r.cnt_ttfb : 0,
+        avg_ttft_ms: r.cnt_ttft ? r.sum_ttft / r.cnt_ttft : 0,
+        avg_latency_ms: r.cnt_latency ? r.sum_latency / r.cnt_latency : 0,
+      }));
+
+      const total_entries = entries.length;
+      const total_input_tokens = entries.reduce((s, e) => s + Number(e.input_tokens || 0), 0);
+      const total_output_tokens = entries.reduce((s, e) => s + Number(e.output_tokens || 0), 0);
+      const starts = entries.map(e => Number(e.start_time_rel_s)).filter(n => !Number.isNaN(n));
+      const ends = entries
+        .map(e => Number(e.start_time_rel_s) + Number(e.latency_ms || 0) / 1000)
+        .filter(n => !Number.isNaN(n));
+      const duration = starts.length && ends.length ? Math.max(...ends) - Math.min(...starts) : 0;
+      const rps = duration > 0 ? total_entries / duration : 0;
+
+      return { total_entries, total_input_tokens, total_output_tokens, rps, major_stats };
+    }
+
+    function applyFilters() {
+      const major = document.getElementById('majorFilter').value;
+      const fromValue = document.getElementById('fromTime').value;
+      const toValue = document.getElementById('toTime').value;
+      const fromDate = fromValue ? new Date(fromValue) : null;
+      const toDate = toValue ? new Date(toValue) : null;
+
+      const filtered = allEntries.filter(e => {
+        if (major !== 'all' && e.category_major !== major) return false;
+        const start = parseLocalDate(e.start_time_real);
+        if (fromDate && (!start || start < fromDate)) return false;
+        if (toDate && (!start || start > toDate)) return false;
+        return true;
+      });
+
+      const computedStats = aggregateFromEntries(filtered);
+      renderStats(computedStats);
+      renderEntries(filtered);
+      drawCharts(computedStats.major_stats || []);
+      document.getElementById('status').textContent = `筛选后共 ${filtered.length} 条记录。`;
+    }
+
+    function renderStats(stats) {
+      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
+      document.getElementById('totalInput').textContent = stats.total_input_tokens ?? 0;
+      document.getElementById('totalOutput').textContent = stats.total_output_tokens ?? 0;
+      document.getElementById('rps').textContent = num(stats.rps);
+    }
+
+    function renderEntries(entries) {
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
+        <tr>
+          <td>${e.id}</td><td>${e.start_time_real}</td><td>${num(e.start_time_rel_s)}</td><td>${num((e.latency_ms || 0) / 1000)}</td>
+          <td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
+          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+        </tr>
+      `).join('');
+    }
+
     async function refreshAll() {
       const [statsResp, entriesResp, cfgResp] = await Promise.all([
         fetch('/api/stats'), fetch('/api/entries'), fetch('/api/self-hosted')
       ]);
       const stats = await statsResp.json();
-      const entries = (await entriesResp.json()).items || [];
+      allEntries = (await entriesResp.json()).items || [];
       const cfgs = (await cfgResp.json()).items || [];
 
-      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
-      document.getElementById('totalInput').textContent = stats.total_input_tokens ?? 0;
-      document.getElementById('totalOutput').textContent = stats.total_output_tokens ?? 0;
-      document.getElementById('rps').textContent = num(stats.rps);
-
-      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
-        <tr>
-          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${e.start_time_real}</td>
-          <td>${num(e.start_time_rel_s)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.latency_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
-          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
-        </tr>
-      `).join('');
+      renderStats(stats);
+      renderEntries(allEntries);
+      drawCharts(stats.major_stats || []);
 
       document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
         <tr>
@@ -129,8 +243,6 @@
           await refreshAll();
         };
       });
-
-      drawCharts(stats.major_stats || []);
     }
 
     function drawCharts(rows) {
@@ -173,7 +285,8 @@
       });
     }
 
-    const fileInput = document.querySelector('#uploadForm input[name="file"]');
+    document.getElementById('pickFileBtn').onclick = () => document.getElementById('pcapFile').click();
+    const fileInput = document.getElementById('pcapFile');
     fileInput.addEventListener('change', () => {
       const f = fileInput.files[0];
       document.getElementById('fileName').textContent = f ? f.name : '未选择文件';
@@ -208,6 +321,19 @@
     document.getElementById('clearCfg').onclick = async () => {
       await fetch('/api/self-hosted/clear', { method: 'POST' });
       document.getElementById('status').textContent = '自建配置已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('filterForm').onsubmit = (e) => {
+      e.preventDefault();
+      applyFilters();
+    };
+
+    document.getElementById('resetFilter').onclick = async () => {
+      document.getElementById('fromTime').value = '';
+      document.getElementById('toTime').value = '';
+      document.getElementById('majorFilter').value = 'all';
+      document.getElementById('status').textContent = '筛选条件已重置。';
       await refreshAll();
     };
 

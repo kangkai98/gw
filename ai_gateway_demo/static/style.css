@@ -40,12 +40,12 @@ body {
 .panel { padding: 18px; }
 .panel h2 { margin: 0 0 12px; font-size: 20px; }
 label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
-input, button {
+input, select, button {
   border-radius: 14px;
   border: 1px solid rgba(53, 86, 140, .2);
   font: inherit;
 }
-input { width: 100%; padding: 12px; background: rgba(255,255,255,.65); }
+input, select { width: 100%; padding: 12px; background: rgba(255,255,255,.65); }
 button { padding: 10px 14px; background: white; cursor: pointer; transition: .2s ease; }
 button:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(54, 93, 160, .2); }
 button:active { transform: translateY(0); }
@@ -61,15 +61,36 @@ table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius:
 th, td { border-bottom: 1px solid rgba(86,112,159,.18); padding: 10px; font-size: 12px; text-align: left; }
 th { color: #3f4f69; background: rgba(255,255,255,.5); position: sticky; top: 0; }
 tr:hover td { background: rgba(255,255,255,.55); }
-@media (max-width: 980px) {
-  .cards, .grid-two, .inline-form { grid-template-columns: 1fr; }
+
+.file-picker-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.file-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: #e8efff;
+  border: 1px solid rgba(53,86,140,.2);
+  color: #2f4d88;
+  font-size: 13px;
+  font-weight: 600;
+}
+.file-name {
+  color: var(--muted);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.filter-panel { margin-bottom: 16px; }
+.filter-form { display: grid; grid-template-columns: 1fr 1fr 200px auto; gap: 10px; align-items: end; }
+.filter-actions { display: flex; gap: 8px; }
 
-.file-label { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
-.file-label input[type="file"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
-.file-btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 14px; border-radius: 14px; background: #e8efff; border: 1px solid rgba(53,86,140,.2); color: #2f4d88; font-size: 13px; font-weight: 600; }
-.file-name { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .value-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
 .value-list li { display: flex; justify-content: space-between; font-size: 13px; color: #42516c; }
 .value-list strong { color: #1f2d46; }
+
+@media (max-width: 980px) {
+  .cards, .grid-two, .inline-form, .filter-form { grid-template-columns: 1fr; }
+}

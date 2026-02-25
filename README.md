@@ -15,11 +15,13 @@ python -m ai_gateway_demo --port 8000
 
 ## 网页功能
 
+- 图表与 Entry 前支持按时间范围 + AI 大类筛选
+- 仓库已移除未使用的 `frontend/` 脚手架代码，统一以 `ai_gateway_demo/templates` 页面为准
 - 上传 pcap 并自动分析入库（无需手动 AI IP/阈值）
 - 清空历史 entry（会重置自增序号）
 - 管理自建 AI 配置（新增/删除/清空，清空会重置序号）
 - 图表展示：
-  - 按大类 Entry 分布（环形图）
+  - AI 类别分布（环形图，含具体数值）
   - 时延均值对比（柱状图：TTFB/TTFT/Latency）
 
 ## 指标说明
@@ -35,6 +37,7 @@ python -m ai_gateway_demo --port 8000
 - **TTFT**：从开始时间到“首个含回答 token 的下行报文”
 - 使用非负约束避免负值；并保证 `TTFT >= TTFB`。
 
-## 说明
 
-- 已移除历史遗留的 `frontend/` (Vite/React) 脚手架代码，当前仅保留并维护 `ai_gateway_demo/templates` 与 `ai_gateway_demo/static` 这套 Python 直出页面。
+## 分类逻辑
+
+- 划分优先级：自建IP > HTTPS/SNI三方 > 其他实验AI。
