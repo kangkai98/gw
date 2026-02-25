@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 
 from .db import (
     add_self_hosted,
@@ -20,14 +21,17 @@ from .db import (
 from .parser import parse_pcap_to_entries
 
 app = FastAPI(title="AI Gateway Demo")
+app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
+templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
 UPLOAD_PATH = Path("uploads")
 UPLOAD_PATH.mkdir(exist_ok=True)
 init_db()
 
-FRONTEND_DIST = Path("frontend/dist")
-if (FRONTEND_DIST / "assets").exists():
-    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/api/entries")
@@ -82,14 +86,3 @@ def api_self_hosted_delete(service_id: int):
 def api_self_hosted_clear():
     clear_self_hosted()
     return {"ok": True}
-
-
-@app.get("/{full_path:path}")
-def serve_spa(full_path: str):
-    index = FRONTEND_DIST / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    raise HTTPException(
-        status_code=503,
-        detail="Frontend build not found. Run `npm install && npm run build` in ./frontend first.",
-    )
