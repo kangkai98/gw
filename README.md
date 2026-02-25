@@ -1,13 +1,8 @@
-# AI 网关 Demo（纯 Python + 原生前端，无需 npm）
+# AI 网关 Demo（纯 Python 启动，无需 npm）
 
-## 目标
+## 启动方式
 
-- 命令行仅用于启动服务
-- 网页完成 pcap 上传、记录清空、自建 AI 配置
-- 无需 npm install，也能提供较“苹果风格”的界面
-- 支持统计图表展示（分类分布环图 + 分类时延条形图）
-
-## 启动
+只需 Python 依赖，不需要 npm：
 
 ```bash
 python -m venv .venv
@@ -16,28 +11,26 @@ pip install -r requirements.txt
 python -m ai_gateway_demo --port 8000
 ```
 
-打开：`http://127.0.0.1:8000`
+打开 `http://127.0.0.1:8000`。
 
-## 页面功能
+## 网页功能
 
-- 上传 PCAP：自动识别 AI 流并入库
-- 清空 Entry：会重置数据库序号
-- 自建 AI 配置：按 IP 维护小类映射；支持删除和一键清空（序号重置）
+- 上传 pcap 并自动分析入库（无需手动 AI IP/阈值）
+- 清空历史 entry（会重置自增序号）
+- 管理自建 AI 配置（新增/删除/清空，清空会重置序号）
+- 图表展示：
+  - 按大类 Entry 分布（环形图）
+  - 时延均值对比（柱状图：TTFB/TTFT/Latency）
 
-## 图表
+## 指标说明
 
-- **分类分布环图**：按大类（自建AI/三方AI/实验AI）展示 Entry 数占比
-- **时延条形图**：按大类展示 Avg TTFB / Avg TTFT / Avg Latency（ms）
+- `start_time_real` / `end_time_real`: 真实时间（`YYYY-MM-DD HH:MM:SS`）
+- `start_time_rel_s`: 相对 pcap 起点时间（秒）
+- `ttfb_ms` / `ttft_ms` / `latency_ms`: 毫秒，保留 1 位小数
+- `tpot_ms_per_token`: 毫秒每 token，保留 1 位小数
 
-## 指标
+## TTFB 与 TTFT 区分策略
 
-- 真实开始/结束时间：`YYYY-MM-DD HH:MM:SS`
-- 相对开始时间：`s`
-- TTFB / TTFT / Latency：`ms`（保留 1 位小数）
-- TPOT：`ms/token`（保留 1 位小数）
-
-### TTFB 与 TTFT 区分
-
-- TTFB：开始到首个下行响应报文
-- TTFT：开始到首个“含回答 token”的下行报文
-- 防御逻辑：不会出现负值，并保证 `TTFT >= TTFB`
+- **TTFB**：从开始时间到“首个下行响应报文”
+- **TTFT**：从开始时间到“首个含回答 token 的下行报文”
+- 使用非负约束避免负值；并保证 `TTFT >= TTFB`。

@@ -21,17 +21,13 @@ from .db import (
 from .parser import parse_pcap_to_entries
 
 app = FastAPI(title="AI Gateway Demo")
-app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
-templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
 UPLOAD_PATH = Path("uploads")
 UPLOAD_PATH.mkdir(exist_ok=True)
 init_db()
 
-
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
+templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
 
 @app.get("/api/entries")
@@ -86,3 +82,8 @@ def api_self_hosted_delete(service_id: int):
 def api_self_hosted_clear():
     clear_self_hosted()
     return {"ok": True}
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})

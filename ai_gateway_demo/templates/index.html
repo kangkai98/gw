@@ -3,233 +3,194 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Gateway Console</title>
+  <title>AI 网关观测台</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
-  <div class="bg-blur orb-1"></div>
-  <div class="bg-blur orb-2"></div>
-  <main class="shell">
-    <header class="top glass">
-      <div>
-        <h1>AI Gateway Console</h1>
-        <p>无需 npm 构建 · 直接上传 PCAP · 自动分类与统计</p>
-      </div>
-      <div class="actions">
-        <button id="refresh-btn" aria-label="刷新数据">刷新</button>
-      </div>
+  <div class="bg-glow"></div>
+  <main class="container">
+    <header class="hero glass">
+      <h1>AI 网关观测台</h1>
+      <p>无需 npm，直接 Python 启动。上传 PCAP、管理自建 AI、查看统计图表。</p>
     </header>
 
-    <section id="summary" class="stats-grid"></section>
+    <section class="cards">
+      <article class="stat glass"><h3>总 Entry 数</h3><p id="totalEntries">0</p></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p></article>
+      <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p></article>
+    </section>
 
     <section class="grid-two">
-      <article class="glass card">
-        <h2>上传与数据管理</h2>
-        <form id="upload-form" class="stack">
-          <label>PCAP 文件
-            <input aria-label="上传 pcap 文件" required type="file" name="file" accept=".pcap,.pcapng" />
-          </label>
-          <div class="inline-btns">
-            <button aria-label="上传并分析" type="submit" class="btn-primary">上传并分析</button>
-            <button aria-label="清空 entry 记录" type="button" id="clear-entry-btn" class="btn-danger">清空记录</button>
+      <section class="glass panel">
+        <h2>上传与记录管理</h2>
+        <form id="uploadForm">
+          <label aria-label="PCAP 文件">PCAP 文件<input name="file" type="file" accept=".pcap,.pcapng" required /></label>
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
           </div>
         </form>
-      </article>
+      </section>
 
-      <article class="glass card">
+      <section class="glass panel">
         <h2>自建 AI 配置</h2>
-        <form id="cfg-form" class="stack">
-          <label>小类名称
-            <input aria-label="自建 AI 小类名称" name="name" required placeholder="如：小微助手" />
-          </label>
-          <label>服务端 IP
-            <input aria-label="自建 AI 服务端 IP" name="server_ip" required placeholder="如：192.168.101.1" />
-          </label>
-          <div class="inline-btns">
-            <button aria-label="保存自建配置" type="submit" class="btn-primary">保存</button>
-            <button aria-label="清空自建配置" type="button" id="clear-cfg-btn" class="btn-warn">清空配置</button>
-          </div>
+        <form id="cfgForm" class="inline-form">
+          <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <button aria-label="保存配置" type="submit">保存</button>
         </form>
-        <div class="table-wrap small">
-          <table id="cfg-table">
-            <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
-            <tbody></tbody>
-          </table>
+        <div class="actions">
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
         </div>
-      </article>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
     </section>
 
     <section class="grid-two">
-      <article class="glass card">
-        <h2>分类分布</h2>
-        <div id="donut-chart" class="chart donut"></div>
-        <div id="donut-legend" class="legend"></div>
-      </article>
-      <article class="glass card">
-        <h2>各分类平均时延（ms）</h2>
-        <div id="bar-chart" class="chart bars"></div>
-      </article>
+      <section class="glass panel chart-panel">
+        <h2>按大类 Entry 分布</h2>
+        <canvas id="majorPie"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <h2>时延均值对比 (ms)</h2>
+        <canvas id="latencyBar"></canvas>
+      </section>
     </section>
 
-    <article class="glass card">
-      <h2>按大类统计</h2>
-      <div class="table-wrap">
-        <table id="major-stats">
-          <thead><tr><th>大类</th><th>Entry数</th><th>输入Token</th><th>输出Token</th><th>Avg TTFB (ms)</th><th>Avg TTFT (ms)</th><th>Avg Latency (ms)</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </article>
-
-    <article class="glass card">
+    <section class="glass panel">
       <h2>Entry 列表</h2>
-      <div class="table-wrap">
-        <table id="entries">
-          <thead>
-            <tr>
-              <th>ID</th><th>大类</th><th>小类</th><th>开始时间</th><th>结束时间</th>
-              <th>开始相对(s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
-              <th>输入</th><th>输出</th><th>Flow</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <p id="op-msg" class="hint" aria-live="polite"></p>
-    </article>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>大类</th><th>小类</th><th>开始时间(真实)</th><th>结束时间(真实)</th>
+            <th>开始时间(相对s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
+            <th>输入</th><th>输出</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <p id="status" class="status" aria-live="polite"></p>
   </main>
 
   <script>
-    const fmt = (v) => (v === null || v === undefined) ? '-' : Number(v).toFixed(1);
-    const esc = (s) => String(s ?? '');
+    let pieChart = null;
+    let barChart = null;
+    const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
 
-    function statCard(title, value){
-      return `<article class="glass stat"><h3>${title}</h3><p>${value}</p></article>`;
-    }
+    async function refreshAll() {
+      const [statsResp, entriesResp, cfgResp] = await Promise.all([
+        fetch('/api/stats'), fetch('/api/entries'), fetch('/api/self-hosted')
+      ]);
+      const stats = await statsResp.json();
+      const entries = (await entriesResp.json()).items || [];
+      const cfgs = (await cfgResp.json()).items || [];
 
-    async function loadConfigs(){
-      const res = await fetch('/api/self-hosted');
-      const data = await res.json();
-      document.querySelector('#cfg-table tbody').innerHTML = (data.items || []).map(c =>
-        `<tr><td>${c.id}</td><td>${esc(c.name)}</td><td>${esc(c.server_ip)}</td><td><button aria-label="删除配置${esc(c.name)}" data-del="${c.id}" class="table-btn">删除</button></td></tr>`
-      ).join('');
+      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
+      document.getElementById('totalInput').textContent = stats.total_input_tokens ?? 0;
+      document.getElementById('totalOutput').textContent = stats.total_output_tokens ?? 0;
+      document.getElementById('rps').textContent = num(stats.rps);
+
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
+        <tr>
+          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${e.start_time_real}</td><td>${e.end_time_real}</td>
+          <td>${num(e.start_time_rel_s)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.latency_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
+          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+        </tr>
+      `).join('');
+
+      document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
+        <tr>
+          <td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td>
+          <td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td>
+        </tr>
+      `).join('');
+
       document.querySelectorAll('[data-del]').forEach(btn => {
         btn.onclick = async () => {
-          await fetch(`/api/self-hosted/${btn.dataset.del}`, {method: 'DELETE'});
-          await loadConfigs();
+          await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' });
+          await refreshAll();
         };
       });
+
+      drawCharts(stats.major_stats || []);
     }
 
-    function renderDonut(majorStats){
-      const total = majorStats.reduce((acc, s) => acc + Number(s.total_entries || 0), 0);
-      const colors = ['#60a5fa', '#34d399', '#f59e0b', '#f472b6', '#a78bfa'];
-      if (!total) {
-        document.getElementById('donut-chart').innerHTML = '<div class="empty">暂无数据</div>';
-        document.getElementById('donut-legend').innerHTML = '';
-        return;
-      }
+    function drawCharts(rows) {
+      const labels = rows.map(r => r.category_major);
+      const counts = rows.map(r => r.total_entries);
+      const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
+      const ttft = rows.map(r => r.avg_ttft_ms || 0);
+      const latency = rows.map(r => r.avg_latency_ms || 0);
 
-      let accum = 0;
-      const parts = majorStats.map((s, i) => {
-        const pct = Number(s.total_entries || 0) / total;
-        const start = accum * 360;
-        const end = (accum + pct) * 360;
-        accum += pct;
-        return `${colors[i % colors.length]} ${start}deg ${end}deg`;
+      const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
+
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(document.getElementById('majorPie'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: counts, backgroundColor: common, borderWidth: 0 }] },
+        options: { plugins: { legend: { labels: { color: '#dbe6ff' } } } }
       });
 
-      document.getElementById('donut-chart').innerHTML = `
-        <div class="donut-core" style="background: conic-gradient(${parts.join(',')});">
-          <div class="donut-hole">${total}<span>entries</span></div>
-        </div>
-      `;
-      document.getElementById('donut-legend').innerHTML = majorStats.map((s, i) =>
-        `<div><span class="dot" style="background:${colors[i % colors.length]}"></span>${esc(s.category_major)} (${s.total_entries})</div>`
-      ).join('');
+      if (barChart) barChart.destroy();
+      barChart = new Chart(document.getElementById('latencyBar'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'TTFB', data: ttfb, backgroundColor: '#8ec5ff' },
+            { label: 'TTFT', data: ttft, backgroundColor: '#7af1ca' },
+            { label: 'Latency', data: latency, backgroundColor: '#ffd486' }
+          ]
+        },
+        options: {
+          scales: {
+            x: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } },
+            y: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } }
+          },
+          plugins: { legend: { labels: { color: '#dbe6ff' } } }
+        }
+      });
     }
 
-    function renderBars(majorStats){
-      const maxLatency = Math.max(...majorStats.map(x => Number(x.avg_latency_ms || 0)), 1);
-      if (!majorStats.length) {
-        document.getElementById('bar-chart').innerHTML = '<div class="empty">暂无数据</div>';
-        return;
-      }
-      const rows = majorStats.map((s) => {
-        const w1 = (Number(s.avg_ttfb_ms || 0) / maxLatency) * 100;
-        const w2 = (Number(s.avg_ttft_ms || 0) / maxLatency) * 100;
-        const w3 = (Number(s.avg_latency_ms || 0) / maxLatency) * 100;
-        return `
-          <div class="bar-row">
-            <div class="bar-name">${esc(s.category_major)}</div>
-            <div class="bar-set">
-              <div class="bar b1" style="width:${w1}%">TTFB ${fmt(s.avg_ttfb_ms)}</div>
-              <div class="bar b2" style="width:${w2}%">TTFT ${fmt(s.avg_ttft_ms)}</div>
-              <div class="bar b3" style="width:${w3}%">LAT ${fmt(s.avg_latency_ms)}</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-      document.getElementById('bar-chart').innerHTML = rows;
-    }
-
-    async function refresh(){
-      const [statsRes, entriesRes] = await Promise.all([fetch('/api/stats'), fetch('/api/entries')]);
-      const stats = await statsRes.json();
-      const entries = await entriesRes.json();
-
-      document.getElementById('summary').innerHTML = [
-        statCard('总 Entry', stats.total_entries),
-        statCard('总输入 Token', stats.total_input_tokens),
-        statCard('总输出 Token', stats.total_output_tokens),
-        statCard('RPS (req/s)', fmt(stats.rps)),
-      ].join('');
-
-      const majorStats = stats.major_stats || [];
-      renderDonut(majorStats);
-      renderBars(majorStats);
-
-      document.querySelector('#major-stats tbody').innerHTML = majorStats.map(s =>
-        `<tr><td>${esc(s.category_major)}</td><td>${s.total_entries}</td><td>${s.total_input_tokens}</td><td>${s.total_output_tokens}</td><td>${fmt(s.avg_ttfb_ms)}</td><td>${fmt(s.avg_ttft_ms)}</td><td>${fmt(s.avg_latency_ms)}</td></tr>`
-      ).join('');
-
-      document.querySelector('#entries tbody').innerHTML = (entries.items || []).map(e =>
-        `<tr><td>${e.id}</td><td>${esc(e.category_major)}</td><td>${esc(e.category_minor)}</td><td>${esc(e.start_time_real)}</td><td>${esc(e.end_time_real)}</td><td>${fmt(e.start_time_rel_s)}</td><td>${fmt(e.ttfb_ms)}</td><td>${fmt(e.ttft_ms)}</td><td>${fmt(e.latency_ms)}</td><td>${fmt(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td>${esc(e.flow_key)}</td></tr>`
-      ).join('');
-    }
-
-    document.getElementById('refresh-btn').onclick = refresh;
-
-    document.getElementById('upload-form').onsubmit = async (e) => {
+    document.getElementById('uploadForm').onsubmit = async (e) => {
       e.preventDefault();
       const form = new FormData(e.target);
-      const res = await fetch('/api/upload', {method: 'POST', body: form});
-      const data = await res.json();
-      document.getElementById('op-msg').textContent = `上传完成，新增 ${data.inserted ?? 0} 条 entry。`;
-      await refresh();
-    };
-
-    document.getElementById('clear-entry-btn').onclick = async () => {
-      await fetch('/api/clear', {method: 'POST'});
-      document.getElementById('op-msg').textContent = '已清空 entry 记录（序号已重置）。';
-      await refresh();
-    };
-
-    document.getElementById('cfg-form').onsubmit = async (e) => {
-      e.preventDefault();
-      const form = new FormData(e.target);
-      await fetch('/api/self-hosted', {method: 'POST', body: form});
+      const r = await fetch('/api/upload', { method: 'POST', body: form });
+      const data = await r.json();
+      document.getElementById('status').textContent = `上传完成，新增 ${data.inserted || 0} 条记录。`;
       e.target.reset();
-      await loadConfigs();
+      await refreshAll();
     };
 
-    document.getElementById('clear-cfg-btn').onclick = async () => {
-      await fetch('/api/self-hosted/clear', {method: 'POST'});
-      await loadConfigs();
+    document.getElementById('clearEntries').onclick = async () => {
+      await fetch('/api/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '记录已清空并重置序号。';
+      await refreshAll();
     };
 
-    loadConfigs();
-    refresh();
+    document.getElementById('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: form });
+      document.getElementById('status').textContent = '自建配置已保存。';
+      e.target.reset();
+      await refreshAll();
+    };
+
+    document.getElementById('clearCfg').onclick = async () => {
+      await fetch('/api/self-hosted/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '自建配置已清空并重置序号。';
+      await refreshAll();
+    };
+
+    refreshAll();
   </script>
 </body>
 </html>
