@@ -34,3 +34,7 @@ python -m ai_gateway_demo --port 8000
 - **TTFB**：从开始时间到“首个下行响应报文”
 - **TTFT**：从开始时间到“首个含回答 token 的下行报文”
 - 使用非负约束避免负值；并保证 `TTFT >= TTFB`。
+
+## 说明
+
+- 已移除历史遗留的 `frontend/` (Vite/React) 脚手架代码，当前仅保留并维护 `ai_gateway_demo/templates` 与 `ai_gateway_demo/static` 这套 Python 直出页面。
