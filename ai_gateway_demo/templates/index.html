@@ -26,10 +26,9 @@
       <section class="glass panel">
         <h2>上传抓包文件</h2>
         <form id="uploadForm">
-          <label class="file-label" aria-label="PCAP 文件">
-            <input name="file" type="file" accept=".pcap,.pcapng" required />
-            <span class="file-btn">选择抓包文件</span>
-            <span id="fileName" class="file-name">未选择文件</span>
+          <label aria-label="PCAP 文件" class="file-label">
+            <span>抓包文件（pcap/pcapng）</span>
+            <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
           </label>
           <div class="actions">
             <button aria-label="上传并分析" type="submit">上传并分析</button>
@@ -43,8 +42,10 @@
         <form id="cfgForm" class="inline-form">
           <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
           <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
-          <button aria-label="保存配置" type="submit">保存</button>
-          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+          <div class="inline-actions">
+            <button aria-label="保存配置" type="submit">保存</button>
+            <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+          </div>
         </form>
         <table id="cfgTable">
           <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
@@ -70,7 +71,7 @@
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>大类</th><th>小类</th><th>流IP</th><th>开始时间(真实)</th>
+            <th>ID</th><th>大类</th><th>小类</th><th>开始时间(真实)</th><th>流IP</th>
             <th>开始时间(相对s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
             <th>输入</th><th>输出</th>
           </tr>
@@ -87,14 +88,6 @@
     let barChart = null;
     const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
 
-    function flowIps(flowKey) {
-      if (!flowKey || !flowKey.includes('-')) return '-';
-      const [a, b] = flowKey.split('-');
-      const ip1 = a.split(':')[0] || '';
-      const ip2 = b.split(':')[0] || '';
-      return `${ip1} ↔ ${ip2}`;
-    }
-
     async function refreshAll() {
       const [statsResp, entriesResp, cfgResp] = await Promise.all([
         fetch('/api/stats'), fetch('/api/entries'), fetch('/api/self-hosted')
@@ -110,7 +103,7 @@
 
       document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
         <tr>
-          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${e.start_time_real}</td>
+          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${e.start_time_real}</td><td>${e.flow_ip || '-'}</td>
           <td>${num(e.start_time_rel_s)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.latency_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
           <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
         </tr>
@@ -142,14 +135,14 @@
 
       const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
       document.getElementById('majorValues').innerHTML = rows
-        .map(r => `<li><span>${r.category_major}</span><strong>${r.total_entries}</strong></li>`)
+        .map((r, idx) => `<li><span class="dot" style="background:${common[idx % common.length]}"></span>${r.category_major}：${r.total_entries}</li>`)
         .join('');
 
       if (pieChart) pieChart.destroy();
       pieChart = new Chart(document.getElementById('majorPie'), {
         type: 'doughnut',
         data: { labels, datasets: [{ data: counts, backgroundColor: common, borderWidth: 0 }] },
-        options: { plugins: { legend: { labels: { color: '#4b5d7a' } } } }
+        options: { plugins: { legend: { labels: { color: '#3f4f69' } } } }
       });
 
       if (barChart) barChart.destroy();
@@ -165,19 +158,13 @@
         },
         options: {
           scales: {
-            x: { ticks: { color: '#4b5d7a' }, grid: { color: 'rgba(80,100,150,0.08)' } },
-            y: { ticks: { color: '#4b5d7a' }, grid: { color: 'rgba(80,100,150,0.08)' } }
+            x: { ticks: { color: '#3f4f69' }, grid: { color: 'rgba(63,79,105,0.12)' } },
+            y: { ticks: { color: '#3f4f69' }, grid: { color: 'rgba(63,79,105,0.12)' } }
           },
-          plugins: { legend: { labels: { color: '#4b5d7a' } } }
+          plugins: { legend: { labels: { color: '#3f4f69' } } }
         }
       });
     }
-
-    const fileInput = document.querySelector('#uploadForm input[name="file"]');
-    fileInput.addEventListener('change', () => {
-      const f = fileInput.files[0];
-      document.getElementById('fileName').textContent = f ? f.name : '未选择文件';
-    });
 
     document.getElementById('uploadForm').onsubmit = async (e) => {
       e.preventDefault();
@@ -186,7 +173,6 @@
       const data = await r.json();
       document.getElementById('status').textContent = `上传完成，新增 ${data.inserted || 0} 条记录。`;
       e.target.reset();
-      document.getElementById('fileName').textContent = '未选择文件';
       await refreshAll();
     };
 

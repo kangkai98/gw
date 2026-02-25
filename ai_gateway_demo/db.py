@@ -11,6 +11,7 @@ ENTRY_COLUMNS: dict[str, str] = {
     "category_major": "TEXT NOT NULL",
     "category_minor": "TEXT NOT NULL",
     "flow_key": "TEXT NOT NULL",
+    "flow_ip": "TEXT NOT NULL",
     "start_time_real": "TEXT NOT NULL",
     "end_time_real": "TEXT NOT NULL",
     "start_time_rel_s": "REAL NOT NULL",
@@ -81,16 +82,17 @@ def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> None:
         conn.execute(
             """
             INSERT INTO entries (
-                category_major, category_minor, flow_key,
+                category_major, category_minor, flow_key, flow_ip,
                 start_time_real, end_time_real, start_time_rel_s,
                 ttfb_ms, ttft_ms, latency_ms, tpot_ms_per_token,
                 input_tokens, output_tokens
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry["category_major"],
                 entry["category_minor"],
                 entry["flow_key"],
+                entry["flow_ip"],
                 entry["start_time_real"],
                 entry["end_time_real"],
                 entry["start_time_rel_s"],

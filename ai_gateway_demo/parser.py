@@ -163,14 +163,23 @@ def _build_entry(
 
     start_pkt = next((p for p in up if p.payload), up[0] if up else ordered[0])
     start_ts = start_pkt.ts
+    epsilon = 1e-6
     down_after_start = [p for p in down_all if p.ts >= start_ts]
 
-    first_down_pkt = next((p for p in down_after_start if p.payload and p.ts > start_ts), None)
-    if first_down_pkt is None:
-        first_down_pkt = next((p for p in down_after_start if p.payload), None)
-    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload) and p.ts > start_ts), None)
-    if first_token_pkt is None:
-        first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
+    # TTFB: 首个下行响应报文；若与开始时间重合，尝试取后续更真实响应时刻
+    first_down_pkt = down_after_start[0] if down_after_start else None
+    if first_down_pkt and (first_down_pkt.ts - start_ts) <= epsilon:
+        later_down = next((p for p in down_after_start if p.ts > start_ts + epsilon), None)
+        if later_down is not None:
+            first_down_pkt = later_down
+
+    # TTFT: 首个含 token 的下行报文；同样优先避免与开始时刻重合
+    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
+    if first_token_pkt and (first_token_pkt.ts - start_ts) <= epsilon:
+        later_token = next((p for p in down_after_start if _has_token_payload(p.payload) and p.ts > start_ts + epsilon), None)
+        if later_token is not None:
+            first_token_pkt = later_token
+
     last_down = down_after_start[-1] if down_after_start else ordered[-1]
 
     ttfb_s = max((first_down_pkt.ts - start_ts), 0.0) if first_down_pkt else None
@@ -192,6 +201,7 @@ def _build_entry(
         "category_major": major,
         "category_minor": minor,
         "flow_key": flow_key,
+        "flow_ip": f"{client_ip} -> {server_ip}",
         "start_time_real": fmt_real_time(start_ts),
         "end_time_real": fmt_real_time(last_down.ts if last_down else start_ts),
         "start_time_rel_s": round(start_ts - base_ts, 1),
