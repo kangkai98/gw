@@ -1,0 +1,36 @@
+:root {
+  --bg: #0b1020;
+  --panel: #121a33;
+  --card: #182242;
+  --text: #e9eefc;
+  --muted: #9fb0df;
+  --accent: #6ea8fe;
+  --danger: #ff6b7a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, "PingFang SC", Arial, sans-serif; background: radial-gradient(circle at top, #18284d, var(--bg)); color: var(--text); }
+.container { max-width: 1400px; margin: 28px auto; padding: 0 16px 32px; }
+.hero { margin-bottom: 18px; }
+.hero h1 { margin: 0 0 8px; font-size: 32px; }
+.hero p { margin: 0; color: var(--muted); }
+.panel { margin-bottom: 16px; }
+.grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.card { background: linear-gradient(180deg, #1a2448, var(--panel)); border: 1px solid #2a3f76; border-radius: 14px; padding: 14px; box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+label { display: block; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+input, button { border-radius: 10px; border: 1px solid #3b4f89; background: #0f1833; color: var(--text); padding: 10px; }
+input { width: 100%; margin-top: 4px; }
+button { cursor: pointer; background: #25407a; }
+button:hover { filter: brightness(1.08); }
+button.danger { background: #5b2430; border-color: #8d3345; }
+.hint { color: var(--muted); min-height: 20px; }
+.inline-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-bottom: 12px; }
+.cards { display: grid; grid-template-columns: repeat(4, minmax(140px, 1fr)); gap: 12px; margin: 16px 0; }
+.stat-card { background: linear-gradient(180deg, #223161, var(--card)); border: 1px solid #314d94; border-radius: 12px; padding: 12px; }
+.stat-card h4 { margin: 0; font-size: 12px; color: var(--muted); }
+.stat-card p { margin: 8px 0 0; font-size: 26px; font-weight: 700; }
+table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 10px; }
+th, td { border: 1px solid #2c4077; padding: 8px; font-size: 12px; }
+th { background: #1f315f; color: #c9d9ff; text-align: left; }
+tr:nth-child(odd) td { background: #101a37; }
+tr:nth-child(even) td { background: #0f1730; }
+@media (max-width: 980px){ .grid-two, .inline-form, .cards { grid-template-columns: 1fr; } }
