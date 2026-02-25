@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 网关观测台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <main class="container">
+    <header class="hero glass">
+      <h1>AI 网关观测台</h1>
+      <p>上传 PCAP、管理自建 AI、查看统计图表。</p>
+    </header>
+
+    <section class="cards">
+      <article class="stat glass"><h3>总 Entry 数</h3><p id="totalEntries">0</p></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p></article>
+      <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p></article>
+    </section>
+
+    <section class="grid-two">
+      <section class="glass panel">
+        <h2>上传抓包文件</h2>
+        <form id="uploadForm">
+          <label class="upload-shell" aria-label="PCAP 文件">
+            <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
+            <span class="file-btn" role="button">选择文件</span>
+            <span id="fileName" class="file-name">未选择文件</span>
+          </label>
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>自建 AI 配置</h2>
+        <form id="cfgForm" class="inline-form">
+          <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <div class="cfg-actions">
+            <button aria-label="保存配置" type="submit">保存</button>
+            <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+          </div>
+        </form>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </section>
+
+    <section class="glass panel">
+      <h2>筛选条件</h2>
+      <form id="filterForm" class="filter-form">
+        <input type="number" step="0.1" min="0" id="startRel" placeholder="开始时间(相对s) >=" aria-label="筛选开始时间(相对秒)" />
+        <input type="number" step="0.1" min="0" id="endRel" placeholder="开始时间(相对s) <=" aria-label="筛选结束时间(相对秒)" />
+        <select id="majorFilter" aria-label="筛选AI大类">
+          <option value="">全部大类</option>
+          <option value="三方AI">三方AI</option>
+          <option value="自建AI">自建AI</option>
+          <option value="实验AI">实验AI</option>
+        </select>
+        <button type="submit" aria-label="应用筛选">应用筛选</button>
+        <button type="button" id="resetFilter" class="ghost-btn" aria-label="重置筛选">重置</button>
+      </form>
+    </section>
+
+    <section class="grid-two">
+      <section class="glass panel chart-panel">
+        <h2>AI 类别分布</h2>
+        <canvas id="majorPie"></canvas>
+        <ul id="majorValues" class="value-list"></ul>
+      </section>
+      <section class="glass panel chart-panel">
+        <h2>时延均值对比 (ms)</h2>
+        <canvas id="latencyBar"></canvas>
+      </section>
+    </section>
+
+    <section class="glass panel">
+      <h2>Entry 列表</h2>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Latency(s)</th><th>大类</th><th>小类</th><th>流IP</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <p id="status" class="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    let pieChart = null;
+    let barChart = null;
+    const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
+
+    function flowIps(flowKey) {
+      if (!flowKey || !flowKey.includes('-')) return '-';
+      const [a, b] = flowKey.split('-');
+      const ip1 = a.split(':')[0] || '';
+      const ip2 = b.split(':')[0] || '';
+      return `${ip1} ↔ ${ip2}`;
+    }
+
+    function queryString() {
+      const start = document.getElementById('startRel').value;
+      const end = document.getElementById('endRel').value;
+      const major = document.getElementById('majorFilter').value;
+      const q = new URLSearchParams();
+      if (start !== '') q.set('start_rel_s', start);
+      if (end !== '') q.set('end_rel_s', end);
+      if (major) q.set('category_major', major);
+      const qs = q.toString();
+      return qs ? `?${qs}` : '';
+    }
+
+    async function refreshAll() {
+      const qs = queryString();
+      const [statsResp, entriesResp, cfgResp] = await Promise.all([
+        fetch(`/api/stats${qs}`), fetch(`/api/entries${qs}`), fetch('/api/self-hosted')
+      ]);
+      const stats = await statsResp.json();
+      const entries = (await entriesResp.json()).items || [];
+      const cfgs = (await cfgResp.json()).items || [];
+
+      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
+      document.getElementById('totalInput').textContent = stats.total_input_tokens ?? 0;
+      document.getElementById('totalOutput').textContent = stats.total_output_tokens ?? 0;
+      document.getElementById('rps').textContent = num(stats.rps);
+
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
+        <tr>
+          <td>${e.id}</td><td>${e.start_time_real}</td><td>${num(e.start_time_rel_s)}</td><td>${num((e.latency_ms || 0) / 1000)}</td>
+          <td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td>
+          <td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
+          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+        </tr>
+      `).join('');
+
+      document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
+        <tr>
+          <td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td>
+          <td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td>
+        </tr>
+      `).join('');
+
+      document.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' });
+          await refreshAll();
+        };
+      });
+
+      drawCharts(stats.major_stats || []);
+    }
+
+    function drawCharts(rows) {
+      const labels = rows.map(r => r.category_major);
+      const counts = rows.map(r => r.total_entries);
+      const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
+      const ttft = rows.map(r => r.avg_ttft_ms || 0);
+      const latency = rows.map(r => r.avg_latency_ms || 0);
+      const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
+
+      document.getElementById('majorValues').innerHTML = rows.map((r, i) =>
+        `<li><span style="color:${common[i % common.length]}">● ${r.category_major}</span><strong>${r.total_entries}</strong></li>`
+      ).join('');
+
+      if (pieChart) pieChart.destroy();
+      if (barChart) barChart.destroy();
+
+      pieChart = new Chart(document.getElementById('majorPie'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: counts, backgroundColor: common }] },
+        options: { plugins: { legend: { position: 'bottom' } } }
+      });
+
+      barChart = new Chart(document.getElementById('latencyBar'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'TTFB', data: ttfb, backgroundColor: '#90caf9' },
+            { label: 'TTFT', data: ttft, backgroundColor: '#80cbc4' },
+            { label: 'Latency', data: latency, backgroundColor: '#ffcc80' },
+          ]
+        },
+        options: { responsive: true, scales: { y: { beginAtZero: true } } }
+      });
+    }
+
+    document.getElementById('pcapFile').onchange = (e) => {
+      const name = e.target.files?.[0]?.name || '未选择文件';
+      document.getElementById('fileName').textContent = name;
+    };
+
+    document.getElementById('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const resp = await fetch('/api/upload', { method: 'POST', body: fd });
+      const data = await resp.json();
+      document.getElementById('status').textContent = `已写入 ${data.inserted ?? 0} 条 entry。`;
+      await refreshAll();
+    };
+
+    document.getElementById('clearEntries').onclick = async () => {
+      await fetch('/api/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '记录已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      e.target.reset();
+      document.getElementById('status').textContent = '自建配置已保存。';
+      await refreshAll();
+    };
+
+    document.getElementById('clearCfg').onclick = async () => {
+      await fetch('/api/self-hosted/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '自建配置已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('filterForm').onsubmit = async (e) => {
+      e.preventDefault();
+      await refreshAll();
+    };
+
+    document.getElementById('resetFilter').onclick = async () => {
+      document.getElementById('startRel').value = '';
+      document.getElementById('endRel').value = '';
+      document.getElementById('majorFilter').value = '';
+      await refreshAll();
+    };
+
+    refreshAll();
+  </script>
+</body>
+</html>
