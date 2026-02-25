@@ -15,6 +15,7 @@ THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
     "doubao app": ("doubao", "volcengine", "ark.cn-beijing"),
     "openai api": ("openai", "chatgpt"),
 }
+HEADER_LIKE_PREFIXES = ("http/", "content-", "date:", "server:", "x-", ":status")
 
 
 @dataclass
@@ -74,7 +75,7 @@ def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
     return client, server
 
 
-def split_entries(flow_packets: list[PacketMeta], gap_threshold: float) -> list[list[PacketMeta]]:
+def split_entries(flow_packets: list[PacketMeta], gap_threshold: float = 2.0) -> list[list[PacketMeta]]:
     if not flow_packets:
         return []
     entries = [[flow_packets[0]]]
@@ -86,13 +87,7 @@ def split_entries(flow_packets: list[PacketMeta], gap_threshold: float) -> list[
     return entries
 
 
-def _pick_flow(flows: dict[str, list[PacketMeta]], ai_ip: str | None = None) -> tuple[str, list[PacketMeta]]:
-    if ai_ip:
-        for key, items in flows.items():
-            if any(pkt.src == ai_ip or pkt.dst == ai_ip for pkt in items):
-                return key, items
-        raise ValueError(f"No flow matches ai_ip={ai_ip}")
-
+def _pick_flow(flows: dict[str, list[PacketMeta]]) -> tuple[str, list[PacketMeta]]:
     all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
     best_keyword_key, best_keyword_hits = "", 0
     best_fallback_key, best_bytes = "", -1
@@ -140,6 +135,19 @@ def classify_flow(
     return "实验AI", _extract_minor_from_payload(flow_packets, server_ip)
 
 
+def _has_token_payload(payload: str) -> bool:
+    if not payload:
+        return False
+    lowered = payload.strip().lower()
+    if not lowered:
+        return False
+    if any(lowered.startswith(prefix) for prefix in HEADER_LIKE_PREFIXES):
+        return False
+    if lowered.startswith("{") and "choices" not in lowered and "content" not in lowered:
+        return False
+    return count_tokens(payload) > 0
+
+
 def _build_entry(
     entry_packets: list[PacketMeta],
     client_ip: str,
@@ -149,21 +157,27 @@ def _build_entry(
     minor: str,
     base_ts: float,
 ) -> dict:
-    up = [p for p in entry_packets if p.src == client_ip]
-    down = [p for p in entry_packets if p.src == server_ip]
+    ordered = sorted(entry_packets, key=lambda p: p.ts)
+    up = [p for p in ordered if p.src == client_ip]
+    down_all = [p for p in ordered if p.src == server_ip]
 
-    start_pkt = next((p for p in up if p.payload), up[0] if up else entry_packets[0])
+    start_pkt = next((p for p in up if p.payload), up[0] if up else ordered[0])
     start_ts = start_pkt.ts
-    first_down = next((p for p in down if p.payload), down[0] if down else None)
-    first_token = next((p for p in down if count_tokens(p.payload) > 0), first_down)
-    last_down = down[-1] if down else entry_packets[-1]
+    down_after_start = [p for p in down_all if p.ts >= start_ts]
 
-    ttfb_s = (first_down.ts - start_ts) if first_down else None
-    ttft_s = (first_token.ts - start_ts) if first_token else None
-    latency_s = (last_down.ts - start_ts) if last_down else None
+    first_down_pkt = down_after_start[0] if down_after_start else None
+    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
+    last_down = down_after_start[-1] if down_after_start else ordered[-1]
+
+    ttfb_s = max((first_down_pkt.ts - start_ts), 0.0) if first_down_pkt else None
+    ttft_s = max((first_token_pkt.ts - start_ts), 0.0) if first_token_pkt else None
+    latency_s = max((last_down.ts - start_ts), 0.0) if last_down else None
+
+    if ttft_s is not None and ttfb_s is not None and ttft_s < ttfb_s:
+        ttft_s = ttfb_s
 
     input_tokens = sum(count_tokens(p.payload) for p in up)
-    output_tokens = sum(count_tokens(p.payload) for p in down)
+    output_tokens = sum(count_tokens(p.payload) for p in down_after_start)
 
     if latency_s is not None and ttft_s is not None and output_tokens > 0:
         tpot_ms = max((latency_s - ttft_s) * 1000, 0) / output_tokens
@@ -188,17 +202,15 @@ def _build_entry(
 
 def parse_pcap_to_entries(
     pcap_path: Path,
-    gap_threshold: float,
     self_hosted_configs: list[dict],
-    ai_ip: str | None = None,
 ) -> list[dict]:
     packets = extract_packets(pcap_path)
     if not packets:
         return []
     flows = group_bi_flows(packets)
-    flow_key, ai_flow = _pick_flow(flows, ai_ip)
+    flow_key, ai_flow = _pick_flow(flows)
     client_ip, server_ip = infer_direction(ai_flow)
     major, minor = classify_flow(ai_flow, server_ip, self_hosted_configs)
-    chunks = split_entries(ai_flow, gap_threshold)
+    chunks = split_entries(ai_flow)
     base_ts = packets[0].ts
     return [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]

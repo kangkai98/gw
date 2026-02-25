@@ -6,7 +6,6 @@ from typing import Any
 
 DB_PATH = Path("ai_gateway_demo.db")
 
-
 ENTRY_COLUMNS: dict[str, str] = {
     "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
     "category_major": "TEXT NOT NULL",
@@ -29,6 +28,19 @@ def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _reset_autoincrement(conn: sqlite3.Connection, table: str) -> None:
+    if _table_exists(conn, "sqlite_sequence"):
+        conn.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
 
 
 def _ensure_entry_schema(conn: sqlite3.Connection) -> None:
@@ -99,6 +111,7 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         conn.execute("DELETE FROM entries")
+        _reset_autoincrement(conn, "entries")
         conn.commit()
     finally:
         conn.close()
@@ -184,6 +197,16 @@ def delete_self_hosted(service_id: int, db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         conn.execute("DELETE FROM self_hosted_services WHERE id = ?", (service_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_self_hosted(db_path: Path = DB_PATH) -> None:
+    conn = get_conn(db_path)
+    try:
+        conn.execute("DELETE FROM self_hosted_services")
+        _reset_autoincrement(conn, "self_hosted_services")
         conn.commit()
     finally:
         conn.close()
