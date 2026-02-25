@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 网关观测台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <main class="container">
+    <header class="hero glass">
+      <h1>AI 网关观测台</h1>
+      <p>无需 npm，直接 Python 启动。上传 PCAP、管理自建 AI、查看统计图表。</p>
+    </header>
+
+    <section class="cards">
+      <article class="stat glass"><h3>总 Entry 数</h3><p id="totalEntries">0</p></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p></article>
+      <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p></article>
+    </section>
+
+    <section class="grid-two">
+      <section class="glass panel">
+        <h2>上传与记录管理</h2>
+        <form id="uploadForm">
+          <label aria-label="PCAP 文件">PCAP 文件<input name="file" type="file" accept=".pcap,.pcapng" required /></label>
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>自建 AI 配置</h2>
+        <form id="cfgForm" class="inline-form">
+          <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <button aria-label="保存配置" type="submit">保存</button>
+        </form>
+        <div class="actions">
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+        </div>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </section>
+
+    <section class="grid-two">
+      <section class="glass panel chart-panel">
+        <h2>按大类 Entry 分布</h2>
+        <canvas id="majorPie"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <h2>时延均值对比 (ms)</h2>
+        <canvas id="latencyBar"></canvas>
+      </section>
+    </section>
+
+    <section class="glass panel">
+      <h2>Entry 列表</h2>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>大类</th><th>小类</th><th>开始时间(真实)</th><th>结束时间(真实)</th>
+            <th>开始时间(相对s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
+            <th>输入</th><th>输出</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <p id="status" class="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    let pieChart = null;
+    let barChart = null;
+    const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
+
+    async function refreshAll() {
+      const [statsResp, entriesResp, cfgResp] = await Promise.all([
+        fetch('/api/stats'), fetch('/api/entries'), fetch('/api/self-hosted')
+      ]);
+      const stats = await statsResp.json();
+      const entries = (await entriesResp.json()).items || [];
+      const cfgs = (await cfgResp.json()).items || [];
+
+      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
+      document.getElementById('totalInput').textContent = stats.total_input_tokens ?? 0;
+      document.getElementById('totalOutput').textContent = stats.total_output_tokens ?? 0;
+      document.getElementById('rps').textContent = num(stats.rps);
+
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
+        <tr>
+          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${e.start_time_real}</td><td>${e.end_time_real}</td>
+          <td>${num(e.start_time_rel_s)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.latency_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
+          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+        </tr>
+      `).join('');
+
+      document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
+        <tr>
+          <td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td>
+          <td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td>
+        </tr>
+      `).join('');
+
+      document.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' });
+          await refreshAll();
+        };
+      });
+
+      drawCharts(stats.major_stats || []);
+    }
+
+    function drawCharts(rows) {
+      const labels = rows.map(r => r.category_major);
+      const counts = rows.map(r => r.total_entries);
+      const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
+      const ttft = rows.map(r => r.avg_ttft_ms || 0);
+      const latency = rows.map(r => r.avg_latency_ms || 0);
+
+      const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
+
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(document.getElementById('majorPie'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: counts, backgroundColor: common, borderWidth: 0 }] },
+        options: { plugins: { legend: { labels: { color: '#dbe6ff' } } } }
+      });
+
+      if (barChart) barChart.destroy();
+      barChart = new Chart(document.getElementById('latencyBar'), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: 'TTFB', data: ttfb, backgroundColor: '#8ec5ff' },
+            { label: 'TTFT', data: ttft, backgroundColor: '#7af1ca' },
+            { label: 'Latency', data: latency, backgroundColor: '#ffd486' }
+          ]
+        },
+        options: {
+          scales: {
+            x: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } },
+            y: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } }
+          },
+          plugins: { legend: { labels: { color: '#dbe6ff' } } }
+        }
+      });
+    }
+
+    document.getElementById('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      const r = await fetch('/api/upload', { method: 'POST', body: form });
+      const data = await r.json();
+      document.getElementById('status').textContent = `上传完成，新增 ${data.inserted || 0} 条记录。`;
+      e.target.reset();
+      await refreshAll();
+    };
+
+    document.getElementById('clearEntries').onclick = async () => {
+      await fetch('/api/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '记录已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const form = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: form });
+      document.getElementById('status').textContent = '自建配置已保存。';
+      e.target.reset();
+      await refreshAll();
+    };
+
+    document.getElementById('clearCfg').onclick = async () => {
+      await fetch('/api/self-hosted/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '自建配置已清空并重置序号。';
+      await refreshAll();
+    };
+
+    refreshAll();
+  </script>
+</body>
+</html>
