@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,13 +31,31 @@ templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
 
 @app.get("/api/entries")
-def api_entries():
-    return {"items": list_entries()}
+def api_entries(
+    category_major: str | None = Query(default=None),
+    start_rel_s: float | None = Query(default=None),
+    end_rel_s: float | None = Query(default=None),
+):
+    return {
+        "items": list_entries(
+            category_major=category_major,
+            start_rel_s=start_rel_s,
+            end_rel_s=end_rel_s,
+        )
+    }
 
 
 @app.get("/api/stats")
-def api_stats():
-    return get_stats()
+def api_stats(
+    category_major: str | None = Query(default=None),
+    start_rel_s: float | None = Query(default=None),
+    end_rel_s: float | None = Query(default=None),
+):
+    return get_stats(
+        category_major=category_major,
+        start_rel_s=start_rel_s,
+        end_rel_s=end_rel_s,
+    )
 
 
 @app.post("/api/upload")

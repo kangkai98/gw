@@ -117,20 +117,51 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
         conn.close()
 
 
-def list_entries(db_path: Path = DB_PATH) -> list[dict[str, Any]]:
+def _build_filters(
+    category_major: str | None = None,
+    start_rel_s: float | None = None,
+    end_rel_s: float | None = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if category_major:
+        clauses.append("category_major = ?")
+        params.append(category_major)
+    if start_rel_s is not None:
+        clauses.append("start_time_rel_s >= ?")
+        params.append(start_rel_s)
+    if end_rel_s is not None:
+        clauses.append("start_time_rel_s <= ?")
+        params.append(end_rel_s)
+    return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
+
+
+def list_entries(
+    category_major: str | None = None,
+    start_rel_s: float | None = None,
+    end_rel_s: float | None = None,
+    db_path: Path = DB_PATH,
+) -> list[dict[str, Any]]:
     conn = get_conn(db_path)
     try:
-        rows = conn.execute("SELECT * FROM entries ORDER BY id DESC").fetchall()
+        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s)
+        rows = conn.execute(f"SELECT * FROM entries{where_sql} ORDER BY id DESC", params).fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
 
 
-def get_stats(db_path: Path = DB_PATH) -> dict[str, Any]:
+def get_stats(
+    category_major: str | None = None,
+    start_rel_s: float | None = None,
+    end_rel_s: float | None = None,
+    db_path: Path = DB_PATH,
+) -> dict[str, Any]:
     conn = get_conn(db_path)
     try:
+        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s)
         totals = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total_entries,
                 COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
@@ -138,10 +169,12 @@ def get_stats(db_path: Path = DB_PATH) -> dict[str, Any]:
                 MIN(start_time_rel_s) AS min_start,
                 MAX(start_time_rel_s + COALESCE(latency_ms, 0)/1000.0) AS max_end
             FROM entries
-            """
+            {where_sql}
+            """,
+            params,
         ).fetchone()
         major_rows = conn.execute(
-            """
+            f"""
             SELECT
                 category_major,
                 COUNT(*) AS total_entries,
@@ -151,9 +184,11 @@ def get_stats(db_path: Path = DB_PATH) -> dict[str, Any]:
                 AVG(ttft_ms) AS avg_ttft_ms,
                 AVG(latency_ms) AS avg_latency_ms
             FROM entries
+            {where_sql}
             GROUP BY category_major
             ORDER BY total_entries DESC
-            """
+            """,
+            params,
         ).fetchall()
 
         min_start = totals["min_start"]
