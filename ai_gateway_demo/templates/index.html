@@ -12,7 +12,7 @@
   <main class="container">
     <header class="hero glass">
       <h1>AI 网关观测台</h1>
-      <p>无需 npm，直接 Python 启动。上传 PCAP、管理自建 AI、查看统计图表。</p>
+      <p>上传 PCAP、管理自建 AI、查看统计图表。</p>
     </header>
 
     <section class="cards">
@@ -24,9 +24,13 @@
 
     <section class="grid-two">
       <section class="glass panel">
-        <h2>上传与记录管理</h2>
+        <h2>上传抓包文件</h2>
         <form id="uploadForm">
-          <label aria-label="PCAP 文件">PCAP 文件<input name="file" type="file" accept=".pcap,.pcapng" required /></label>
+          <label class="file-label" aria-label="PCAP 文件">
+            <input name="file" type="file" accept=".pcap,.pcapng" required />
+            <span class="file-btn">选择抓包文件</span>
+            <span id="fileName" class="file-name">未选择文件</span>
+          </label>
           <div class="actions">
             <button aria-label="上传并分析" type="submit">上传并分析</button>
             <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
@@ -40,10 +44,8 @@
           <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
           <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
           <button aria-label="保存配置" type="submit">保存</button>
-        </form>
-        <div class="actions">
           <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
-        </div>
+        </form>
         <table id="cfgTable">
           <thead><tr><th>ID</th><th>小类</th><th>IP</th><th>操作</th></tr></thead>
           <tbody></tbody>
@@ -53,8 +55,9 @@
 
     <section class="grid-two">
       <section class="glass panel chart-panel">
-        <h2>按大类 Entry 分布</h2>
+        <h2>AI 类别分布</h2>
         <canvas id="majorPie"></canvas>
+        <ul id="majorValues" class="value-list"></ul>
       </section>
       <section class="glass panel chart-panel">
         <h2>时延均值对比 (ms)</h2>
@@ -67,7 +70,7 @@
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>大类</th><th>小类</th><th>开始时间(真实)</th><th>结束时间(真实)</th>
+            <th>ID</th><th>大类</th><th>小类</th><th>流IP</th><th>开始时间(真实)</th>
             <th>开始时间(相对s)</th><th>TTFB(ms)</th><th>TTFT(ms)</th><th>Latency(ms)</th><th>TPOT(ms/token)</th>
             <th>输入</th><th>输出</th>
           </tr>
@@ -84,6 +87,14 @@
     let barChart = null;
     const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
 
+    function flowIps(flowKey) {
+      if (!flowKey || !flowKey.includes('-')) return '-';
+      const [a, b] = flowKey.split('-');
+      const ip1 = a.split(':')[0] || '';
+      const ip2 = b.split(':')[0] || '';
+      return `${ip1} ↔ ${ip2}`;
+    }
+
     async function refreshAll() {
       const [statsResp, entriesResp, cfgResp] = await Promise.all([
         fetch('/api/stats'), fetch('/api/entries'), fetch('/api/self-hosted')
@@ -99,7 +110,7 @@
 
       document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
         <tr>
-          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${e.start_time_real}</td><td>${e.end_time_real}</td>
+          <td>${e.id}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${e.start_time_real}</td>
           <td>${num(e.start_time_rel_s)}</td><td>${num(e.ttfb_ms)}</td><td>${num(e.ttft_ms)}</td><td>${num(e.latency_ms)}</td><td>${num(e.tpot_ms_per_token)}</td>
           <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
         </tr>
@@ -130,12 +141,15 @@
       const latency = rows.map(r => r.avg_latency_ms || 0);
 
       const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
+      document.getElementById('majorValues').innerHTML = rows
+        .map(r => `<li><span>${r.category_major}</span><strong>${r.total_entries}</strong></li>`)
+        .join('');
 
       if (pieChart) pieChart.destroy();
       pieChart = new Chart(document.getElementById('majorPie'), {
         type: 'doughnut',
         data: { labels, datasets: [{ data: counts, backgroundColor: common, borderWidth: 0 }] },
-        options: { plugins: { legend: { labels: { color: '#dbe6ff' } } } }
+        options: { plugins: { legend: { labels: { color: '#4b5d7a' } } } }
       });
 
       if (barChart) barChart.destroy();
@@ -151,13 +165,19 @@
         },
         options: {
           scales: {
-            x: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } },
-            y: { ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(255,255,255,0.08)' } }
+            x: { ticks: { color: '#4b5d7a' }, grid: { color: 'rgba(80,100,150,0.08)' } },
+            y: { ticks: { color: '#4b5d7a' }, grid: { color: 'rgba(80,100,150,0.08)' } }
           },
-          plugins: { legend: { labels: { color: '#dbe6ff' } } }
+          plugins: { legend: { labels: { color: '#4b5d7a' } } }
         }
       });
     }
+
+    const fileInput = document.querySelector('#uploadForm input[name="file"]');
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files[0];
+      document.getElementById('fileName').textContent = f ? f.name : '未选择文件';
+    });
 
     document.getElementById('uploadForm').onsubmit = async (e) => {
       e.preventDefault();
@@ -166,6 +186,7 @@
       const data = await r.json();
       document.getElementById('status').textContent = `上传完成，新增 ${data.inserted || 0} 条记录。`;
       e.target.reset();
+      document.getElementById('fileName').textContent = '未选择文件';
       await refreshAll();
     };
 

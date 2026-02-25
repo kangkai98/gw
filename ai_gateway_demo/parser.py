@@ -165,8 +165,12 @@ def _build_entry(
     start_ts = start_pkt.ts
     down_after_start = [p for p in down_all if p.ts >= start_ts]
 
-    first_down_pkt = down_after_start[0] if down_after_start else None
-    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
+    first_down_pkt = next((p for p in down_after_start if p.payload and p.ts > start_ts), None)
+    if first_down_pkt is None:
+        first_down_pkt = next((p for p in down_after_start if p.payload), None)
+    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload) and p.ts > start_ts), None)
+    if first_token_pkt is None:
+        first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
     last_down = down_after_start[-1] if down_after_start else ordered[-1]
 
     ttfb_s = max((first_down_pkt.ts - start_ts), 0.0) if first_down_pkt else None
