@@ -16,6 +16,12 @@ THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
     "openai api": ("openai", "chatgpt"),
 }
 HEADER_LIKE_PREFIXES = ("http/", "content-", "date:", "server:", "x-", ":status")
+TLS_LIKE_DOMAINS = re.compile(r"([a-zA-Z0-9.-]+\.(?:com|cn|net|ai|io|org))")
+SNI_PATTERNS = (
+    re.compile(r"(?i)server_name\s*[:=]\s*([a-zA-Z0-9.-]+)"),
+    re.compile(r"(?i)sni\s*[:=]\s*([a-zA-Z0-9.-]+)"),
+    re.compile(r"(?im)^host\s*:\s*([a-zA-Z0-9.-]+)"),
+)
 
 
 @dataclass
@@ -23,6 +29,8 @@ class PacketMeta:
     ts: float
     src: str
     dst: str
+    src_port: int
+    dst_port: int
     payload: str
     flow_key: str
 
@@ -50,7 +58,17 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
         tcp = p[TCP]
         payload = decode_payload(bytes(tcp[Raw])) if Raw in tcp else ""
         flow_key = f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}"
-        result.append(PacketMeta(float(p.time), ip.src, ip.dst, payload, flow_key))
+        result.append(
+            PacketMeta(
+                ts=float(p.time),
+                src=ip.src,
+                dst=ip.dst,
+                src_port=int(tcp.sport),
+                dst_port=int(tcp.dport),
+                payload=payload,
+                flow_key=flow_key,
+            )
+        )
     return sorted(result, key=lambda x: x.ts)
 
 
@@ -87,23 +105,21 @@ def split_entries(flow_packets: list[PacketMeta], gap_threshold: float = 2.0) ->
     return entries
 
 
-def _pick_flow(flows: dict[str, list[PacketMeta]]) -> tuple[str, list[PacketMeta]]:
-    all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
-    best_keyword_key, best_keyword_hits = "", 0
-    best_fallback_key, best_bytes = "", -1
-    for key, items in flows.items():
-        merged = "\n".join(p.payload.lower() for p in items if p.payload)
-        hits = sum(1 for kw in all_keywords if kw in merged)
-        if hits > best_keyword_hits:
-            best_keyword_key, best_keyword_hits = key, hits
-        total_bytes = sum(len(p.payload) for p in items)
-        if total_bytes > best_bytes:
-            best_fallback_key, best_bytes = key, total_bytes
+def _is_encrypted_flow(flow_packets: list[PacketMeta]) -> bool:
+    return any(p.src_port in (443, 8443) or p.dst_port in (443, 8443) for p in flow_packets)
 
-    selected = best_keyword_key if best_keyword_hits > 0 else best_fallback_key
-    if not selected:
-        raise ValueError("No TCP flow found in pcap")
-    return selected, flows[selected]
+
+def _extract_sni_or_host(flow_packets: list[PacketMeta]) -> str:
+    merged = "\n".join(p.payload for p in flow_packets if p.payload)
+    for pattern in SNI_PATTERNS:
+        match = pattern.search(merged)
+        if match:
+            return match.group(1).strip().lower()[:100]
+
+    fallback = TLS_LIKE_DOMAINS.search(merged)
+    if fallback:
+        return fallback.group(1).strip().lower()[:100]
+    return ""
 
 
 def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str) -> str:
@@ -111,11 +127,11 @@ def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str
     host_match = re.search(r"(?im)^(?:host|authority)\s*:\s*([^\s]+)", merged)
     if host_match:
         return host_match.group(1)[:80]
-    sni_like = re.search(r"([a-zA-Z0-9.-]+\.(?:com|cn|net|ai|io))", merged)
+    sni_like = TLS_LIKE_DOMAINS.search(merged)
     if sni_like:
         return sni_like.group(1)[:80]
     words = TOKEN_RE.findall(merged)
-    return (words[0][:30] if words else f"unknown-{fallback_ip}")
+    return words[0][:30] if words else f"unknown-{fallback_ip}"
 
 
 def classify_flow(
@@ -127,12 +143,30 @@ def classify_flow(
         if cfg["server_ip"] == server_ip:
             return "自建AI", cfg["name"]
 
-    text = "\n".join(pkt.payload.lower() for pkt in flow_packets if pkt.payload)
-    for minor, keys in THIRD_PARTY_RULES.items():
-        if any(k in text for k in keys):
-            return "三方AI", minor
+    if _is_encrypted_flow(flow_packets):
+        sni = _extract_sni_or_host(flow_packets)
+        for minor, keys in THIRD_PARTY_RULES.items():
+            if any(k in sni for k in keys):
+                return "三方AI", minor
 
     return "实验AI", _extract_minor_from_payload(flow_packets, server_ip)
+
+
+def _pick_flow(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> tuple[str, list[PacketMeta], str, str, str, str]:
+    if not flows:
+        raise ValueError("No TCP flow found in pcap")
+
+    ranked: list[tuple[int, int, str, list[PacketMeta], str, str, str, str]] = []
+    for key, items in flows.items():
+        client_ip, server_ip = infer_direction(items)
+        major, minor = classify_flow(items, server_ip, self_hosted_configs)
+        payload_bytes = sum(len(p.payload) for p in items)
+        priority = {"自建AI": 3, "三方AI": 2, "实验AI": 1}.get(major, 0)
+        ranked.append((priority, payload_bytes, key, items, client_ip, server_ip, major, minor))
+
+    ranked.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    _, _, key, items, client_ip, server_ip, major, minor = ranked[0]
+    return key, items, client_ip, server_ip, major, minor
 
 
 def _has_token_payload(payload: str) -> bool:
@@ -143,9 +177,20 @@ def _has_token_payload(payload: str) -> bool:
         return False
     if any(lowered.startswith(prefix) for prefix in HEADER_LIKE_PREFIXES):
         return False
-    if lowered.startswith("{") and "choices" not in lowered and "content" not in lowered:
+    if lowered.startswith("{") and "choices" not in lowered and "content" not in lowered and "answer" not in lowered:
         return False
     return count_tokens(payload) > 0
+
+
+def _is_client_request_payload(payload: str) -> bool:
+    if not payload:
+        return False
+    lower = payload.strip().lower()
+    if lower.startswith(("get ", "post ", "put ", "patch ", "delete ")):
+        return True
+    if lower.startswith("{") and ("prompt" in lower or "messages" in lower or "question" in lower or "input" in lower):
+        return True
+    return count_tokens(payload) >= 3
 
 
 def _build_entry(
@@ -161,16 +206,15 @@ def _build_entry(
     up = [p for p in ordered if p.src == client_ip]
     down_all = [p for p in ordered if p.src == server_ip]
 
-    start_pkt = next((p for p in up if p.payload), up[0] if up else ordered[0])
-    start_ts = start_pkt.ts
-    down_after_start = [p for p in down_all if p.ts >= start_ts]
+    start_pkt = next((p for p in up if _is_client_request_payload(p.payload)), None)
+    if start_pkt is None:
+        start_pkt = next((p for p in up if p.payload), up[0] if up else ordered[0])
 
-    first_down_pkt = next((p for p in down_after_start if p.payload and p.ts > start_ts), None)
-    if first_down_pkt is None:
-        first_down_pkt = next((p for p in down_after_start if p.payload), None)
-    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload) and p.ts > start_ts), None)
-    if first_token_pkt is None:
-        first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
+    start_ts = start_pkt.ts
+    down_after_start = [p for p in down_all if p.ts > start_ts + 1e-6]
+
+    first_down_pkt = next((p for p in down_after_start if p.payload), None)
+    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload)), None)
     last_down = down_after_start[-1] if down_after_start else ordered[-1]
 
     ttfb_s = max((first_down_pkt.ts - start_ts), 0.0) if first_down_pkt else None
@@ -211,10 +255,9 @@ def parse_pcap_to_entries(
     packets = extract_packets(pcap_path)
     if not packets:
         return []
+
     flows = group_bi_flows(packets)
-    flow_key, ai_flow = _pick_flow(flows)
-    client_ip, server_ip = infer_direction(ai_flow)
-    major, minor = classify_flow(ai_flow, server_ip, self_hosted_configs)
+    flow_key, ai_flow, client_ip, server_ip, major, minor = _pick_flow(flows, self_hosted_configs)
     chunks = split_entries(ai_flow)
     base_ts = packets[0].ts
     return [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]
