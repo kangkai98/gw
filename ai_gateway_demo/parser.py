@@ -12,8 +12,15 @@ from scapy.all import IP, TCP, Raw, rdpcap
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
     "qwen api": ("qwen", "dashscope", "aliyun"),
-    "doubao app": ("doubao", "volcengine", "ark.cn-beijing"),
+    "doubao app": ("doubao", "volcengine", "ark.cn-beijing", "coze"),
     "openai api": ("openai", "chatgpt"),
+    "claude api": ("anthropic", "claude"),
+    "gemini api": ("googleapis", "gemini", "generativelanguage"),
+    "文心一言": ("baidu", "wenxin", "ernie"),
+    "讯飞星火": ("xfyun", "spark"),
+    "kimi": ("moonshot", "kimi"),
+    "智谱ai": ("zhipu", "bigmodel"),
+    "deepseek": ("deepseek",),
 }
 HEADER_LIKE_PREFIXES = ("http/", "content-", "date:", "server:", "x-", ":status")
 
@@ -183,7 +190,11 @@ def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str
     merged = "\n".join(p.payload for p in flow_packets if p.payload)
     host_match = re.search(r"(?im)^(?:host|authority)\s*:\s*([^\s]+)", merged)
     if host_match:
-        return host_match.group(1)[:80]
+        host = host_match.group(1)[:80].lower()
+        for minor, keys in THIRD_PARTY_RULES.items():
+            if any(k in host for k in keys):
+                return minor
+        return host
     words = TOKEN_RE.findall(merged)
     return words[0][:30] if words else f"exp-{fallback_ip}"
 
@@ -276,6 +287,22 @@ def _build_entry(
     }
 
 
+
+
+def _is_valid_entry(entry: dict) -> bool:
+    latency = entry.get("latency_ms")
+    ttft = entry.get("ttft_ms")
+    input_tokens = entry.get("input_tokens") or 0
+    output_tokens = entry.get("output_tokens") or 0
+
+    if latency is None or latency <= 0:
+        return False
+    if ttft is None or ttft <= 0:
+        return False
+    if input_tokens <= 0 or output_tokens <= 0:
+        return False
+    return True
+
 def parse_pcap_to_entries(
     pcap_path: Path,
     self_hosted_configs: list[dict],
@@ -289,4 +316,5 @@ def parse_pcap_to_entries(
     major, minor = classify_flow(ai_flow, client_ip=client_ip, server_ip=server_ip, self_hosted_configs=self_hosted_configs)
     chunks = split_entries(ai_flow)
     base_ts = packets[0].ts
-    return [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]
+    entries = [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]
+    return [entry for entry in entries if _is_valid_entry(entry)]

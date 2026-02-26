@@ -16,7 +16,7 @@
     </header>
 
     <section class="cards">
-      <article class="stat glass"><h3>总 Entry 数</h3><p id="totalEntries">0</p></article>
+      <article class="stat glass"><h3>总 Request 数</h3><p id="totalEntries">0</p></article>
       <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p></article>
       <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p></article>
       <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p></article>
@@ -58,24 +58,23 @@
     <section class="glass panel">
       <h2>筛选条件</h2>
       <form id="filterForm" class="filter-form">
-        <input type="number" step="0.1" min="0" id="startRel" placeholder="开始时间(相对s) >=" aria-label="筛选开始时间(相对秒)" />
-        <input type="number" step="0.1" min="0" id="endRel" placeholder="开始时间(相对s) <=" aria-label="筛选结束时间(相对秒)" />
+        <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
+        <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
         <select id="majorFilter" aria-label="筛选AI大类">
           <option value="">全部大类</option>
           <option value="三方AI">三方AI</option>
           <option value="自建AI">自建AI</option>
           <option value="实验AI">实验AI</option>
         </select>
-        <button type="submit" aria-label="应用筛选">应用筛选</button>
-        <button type="button" id="resetFilter" class="ghost-btn" aria-label="重置筛选">重置</button>
+        <button type="submit" aria-label="应用筛选" class="filter-btn">应用筛选</button>
+        <button type="button" id="resetFilter" class="filter-btn ghost-btn" aria-label="重置筛选">重置</button>
       </form>
     </section>
 
     <section class="grid-two">
       <section class="glass panel chart-panel">
-        <h2>AI 类别分布</h2>
+        <h2>AI 类别 Request 分布</h2>
         <canvas id="majorPie"></canvas>
-        <ul id="majorValues" class="value-list"></ul>
       </section>
       <section class="glass panel chart-panel">
         <h2>时延均值对比 (ms)</h2>
@@ -83,8 +82,19 @@
       </section>
     </section>
 
+    <section class="grid-two">
+      <section class="glass panel chart-panel">
+        <h2>大类总 Token 分布</h2>
+        <canvas id="tokenPie"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <h2>大类按时间 Request 次数</h2>
+        <canvas id="majorLine"></canvas>
+      </section>
+    </section>
+
     <section class="glass panel">
-      <h2>Entry 列表</h2>
+      <h2>Request 列表</h2>
       <table id="entryTable">
         <thead>
           <tr>
@@ -102,23 +112,28 @@
   <script>
     let pieChart = null;
     let barChart = null;
+    let tokenPieChart = null;
+    let lineChart = null;
     const num = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(1));
 
     function flowIps(flowKey) {
       if (!flowKey || !flowKey.includes('-')) return '-';
       const [a, b] = flowKey.split('-');
-      const ip1 = a.split(':')[0] || '';
-      const ip2 = b.split(':')[0] || '';
-      return `${ip1} ↔ ${ip2}`;
+      return `${a.split(':')[0] || ''} ↔ ${b.split(':')[0] || ''}`;
+    }
+
+    function toServerTime(v) {
+      if (!v) return '';
+      return v.replace('T', ' ') + ':00';
     }
 
     function queryString() {
-      const start = document.getElementById('startRel').value;
-      const end = document.getElementById('endRel').value;
+      const startReal = toServerTime(document.getElementById('startReal').value);
+      const endReal = toServerTime(document.getElementById('endReal').value);
       const major = document.getElementById('majorFilter').value;
       const q = new URLSearchParams();
-      if (start !== '') q.set('start_rel_s', start);
-      if (end !== '') q.set('end_rel_s', end);
+      if (startReal) q.set('start_real', startReal);
+      if (endReal) q.set('end_real', endReal);
       if (major) q.set('category_major', major);
       const qs = q.toString();
       return qs ? `?${qs}` : '';
@@ -161,23 +176,22 @@
         };
       });
 
-      drawCharts(stats.major_stats || []);
+      drawCharts(stats.major_stats || [], entries);
     }
 
-    function drawCharts(rows) {
+    function drawCharts(rows, entries) {
       const labels = rows.map(r => r.category_major);
       const counts = rows.map(r => r.total_entries);
       const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
       const ttft = rows.map(r => r.avg_ttft_ms || 0);
       const latency = rows.map(r => r.avg_latency_ms || 0);
+      const tokenTotals = rows.map(r => (r.total_input_tokens || 0) + (r.total_output_tokens || 0));
       const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
-
-      document.getElementById('majorValues').innerHTML = rows.map((r, i) =>
-        `<li><span style="color:${common[i % common.length]}">● ${r.category_major}</span><strong>${r.total_entries}</strong></li>`
-      ).join('');
 
       if (pieChart) pieChart.destroy();
       if (barChart) barChart.destroy();
+      if (tokenPieChart) tokenPieChart.destroy();
+      if (lineChart) lineChart.destroy();
 
       pieChart = new Chart(document.getElementById('majorPie'), {
         type: 'doughnut',
@@ -197,11 +211,43 @@
         },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
+
+      tokenPieChart = new Chart(document.getElementById('tokenPie'), {
+        type: 'pie',
+        data: { labels, datasets: [{ data: tokenTotals, backgroundColor: common }] },
+        options: { plugins: { legend: { position: 'bottom' } } }
+      });
+
+      const buckets = {};
+      for (const e of entries) {
+        const t = (e.start_time_real || '').slice(0, 16);
+        if (!t) continue;
+        if (!buckets[t]) buckets[t] = {};
+        buckets[t][e.category_major] = (buckets[t][e.category_major] || 0) + 1;
+      }
+      const times = Object.keys(buckets).sort();
+      const majors = ['三方AI', '自建AI', '实验AI'];
+      const ds = majors.map((m, idx) => ({
+        label: m,
+        data: times.map(t => buckets[t][m] || 0),
+        borderColor: common[idx],
+        backgroundColor: common[idx],
+        tension: 0.2,
+      }));
+
+      lineChart = new Chart(document.getElementById('majorLine'), {
+        type: 'line',
+        data: { labels: times, datasets: ds },
+        options: {
+          responsive: true,
+          scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          plugins: { legend: { position: 'bottom' } }
+        }
+      });
     }
 
     document.getElementById('pcapFile').onchange = (e) => {
-      const name = e.target.files?.[0]?.name || '未选择文件';
-      document.getElementById('fileName').textContent = name;
+      document.getElementById('fileName').textContent = e.target.files?.[0]?.name || '未选择文件';
     };
 
     document.getElementById('uploadForm').onsubmit = async (e) => {
@@ -209,7 +255,7 @@
       const fd = new FormData(e.target);
       const resp = await fetch('/api/upload', { method: 'POST', body: fd });
       const data = await resp.json();
-      document.getElementById('status').textContent = `已写入 ${data.inserted ?? 0} 条 entry。`;
+      document.getElementById('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`;
       await refreshAll();
     };
 
@@ -240,8 +286,8 @@
     };
 
     document.getElementById('resetFilter').onclick = async () => {
-      document.getElementById('startRel').value = '';
-      document.getElementById('endRel').value = '';
+      document.getElementById('startReal').value = '';
+      document.getElementById('endReal').value = '';
       document.getElementById('majorFilter').value = '';
       await refreshAll();
     };

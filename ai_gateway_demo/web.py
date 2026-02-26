@@ -35,12 +35,16 @@ def api_entries(
     category_major: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
 ):
     return {
         "items": list_entries(
             category_major=category_major,
             start_rel_s=start_rel_s,
             end_rel_s=end_rel_s,
+            start_real=start_real,
+            end_real=end_real,
         )
     }
 
@@ -50,11 +54,15 @@ def api_stats(
     category_major: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
 ):
     return get_stats(
         category_major=category_major,
         start_rel_s=start_rel_s,
         end_rel_s=end_rel_s,
+        start_real=start_real,
+        end_real=end_real,
     )
 
 
