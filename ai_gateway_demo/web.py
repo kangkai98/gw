@@ -30,21 +30,22 @@ app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="stat
 templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 
 
+@app.get("/api/requests")
 @app.get("/api/entries")
-def api_entries(
+def api_requests(
     category_major: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
-    start_real: str | None = Query(default=None),
-    end_real: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
 ):
     return {
         "items": list_entries(
             category_major=category_major,
             start_rel_s=start_rel_s,
             end_rel_s=end_rel_s,
-            start_real=start_real,
-            end_real=end_real,
+            start_date=start_date,
+            end_date=end_date,
         )
     }
 
@@ -54,15 +55,15 @@ def api_stats(
     category_major: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
-    start_real: str | None = Query(default=None),
-    end_real: str | None = Query(default=None),
+    start_date: str | None = Query(default=None),
+    end_date: str | None = Query(default=None),
 ):
     return get_stats(
         category_major=category_major,
         start_rel_s=start_rel_s,
         end_rel_s=end_rel_s,
-        start_real=start_real,
-        end_real=end_real,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 

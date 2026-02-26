@@ -121,8 +121,8 @@ def _build_filters(
     category_major: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
-    start_real: str | None = None,
-    end_real: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> tuple[str, list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
@@ -135,12 +135,12 @@ def _build_filters(
     if end_rel_s is not None:
         clauses.append("start_time_rel_s <= ?")
         params.append(end_rel_s)
-    if start_real:
+    if start_date:
         clauses.append("start_time_real >= ?")
-        params.append(start_real)
-    if end_real:
+        params.append(f"{start_date} 00:00:00")
+    if end_date:
         clauses.append("start_time_real <= ?")
-        params.append(end_real)
+        params.append(f"{end_date} 23:59:59")
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
 
 
@@ -148,13 +148,13 @@ def list_entries(
     category_major: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
-    start_real: str | None = None,
-    end_real: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     db_path: Path = DB_PATH,
 ) -> list[dict[str, Any]]:
     conn = get_conn(db_path)
     try:
-        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_real, end_real)
+        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_date, end_date)
         rows = conn.execute(f"SELECT * FROM entries{where_sql} ORDER BY id DESC", params).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -165,13 +165,13 @@ def get_stats(
     category_major: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
-    start_real: str | None = None,
-    end_real: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     db_path: Path = DB_PATH,
 ) -> dict[str, Any]:
     conn = get_conn(db_path)
     try:
-        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_real, end_real)
+        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_date, end_date)
         totals = conn.execute(
             f"""
             SELECT
