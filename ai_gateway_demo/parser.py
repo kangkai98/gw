@@ -11,15 +11,16 @@ from scapy.all import IP, TCP, Raw, rdpcap
 
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
-    "qwen api": ("qwen", "dashscope", "aliyun", "tongyi"),
-    "doubao app": ("doubao", "volcengine", "ark.cn-beijing", "byte"),
-    "openai api": ("openai", "chatgpt", "oai"),
+    "qwen api": ("qwen", "dashscope", "aliyun"),
+    "doubao app": ("doubao", "volcengine", "ark.cn-beijing", "coze"),
+    "openai api": ("openai", "chatgpt"),
     "claude api": ("anthropic", "claude"),
-    "gemini api": ("googleapis", "gemini", "bard"),
-    "kimi api": ("moonshot", "kimi"),
-    "deepseek api": ("deepseek",),
-    "zhipu glm": ("zhipu", "bigmodel", "chatglm", "glm"),
-    "baichuan api": ("baichuan",),
+    "gemini api": ("googleapis", "gemini", "generativelanguage"),
+    "文心一言": ("baidu", "wenxin", "ernie"),
+    "讯飞星火": ("xfyun", "spark"),
+    "kimi": ("moonshot", "kimi"),
+    "智谱ai": ("zhipu", "bigmodel"),
+    "deepseek": ("deepseek",),
 }
 HEADER_LIKE_PREFIXES = ("http/", "content-", "date:", "server:", "x-", ":status")
 
@@ -52,13 +53,13 @@ def _extract_tls_sni(raw: bytes) -> str | None:
     if len(raw) < 10:
         return None
     try:
-        if raw[0] != 0x16:
+        if raw[0] != 0x16:  # TLS handshake
             return None
         idx = 5
-        if raw[idx] != 0x01:
+        if raw[idx] != 0x01:  # client hello
             return None
-        idx += 4
-        idx += 2 + 32
+        idx += 4  # hs type + hs len
+        idx += 2 + 32  # version + random
         session_len = raw[idx]
         idx += 1 + session_len
         cs_len = int.from_bytes(raw[idx : idx + 2], "big")
@@ -156,39 +157,23 @@ def _is_https_flow(flow_packets: list[PacketMeta], client_ip: str) -> bool:
     return any(pkt.src == client_ip and pkt.sni for pkt in flow_packets)
 
 
-def _extract_host_from_payload(flow_packets: list[PacketMeta]) -> str:
-    merged = "\n".join(p.payload for p in flow_packets if p.payload)
-    m = re.search(r"(?im)^(?:host|authority)\s*:\s*([^\s]+)", merged)
-    return m.group(1).lower() if m else ""
-
-
-def _match_third_party_minor(sni_text: str, host_text: str, payload_text: str) -> str | None:
-    all_text = "\n".join([sni_text, host_text, payload_text]).lower()
-    for minor, keys in THIRD_PARTY_RULES.items():
-        if any(k in all_text for k in keys):
-            return minor
-    return None
-
-
 def _pick_flow(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> tuple[str, list[PacketMeta]]:
     self_hosted_ips = {cfg["server_ip"] for cfg in self_hosted_configs}
+    all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
+
     best_key = ""
     best_score = float("-inf")
-
     for key, items in flows.items():
         client_ip, server_ip = infer_direction(items)
-        payload_text = "\n".join(p.payload.lower() for p in items if p.payload)
+        text = "\n".join(p.payload.lower() for p in items if p.payload)
         sni_text = "\n".join((p.sni or "") for p in items if p.sni)
-        host_text = _extract_host_from_payload(items)
 
         score = 0.0
         if server_ip in self_hosted_ips:
-            score += 80.0
+            score += 60.0
+        score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
+        score += 8.0 * sum(1 for kw in all_keywords if kw in text)
         if _is_https_flow(items, client_ip):
-            score += 20.0
-        if _match_third_party_minor(sni_text, host_text, payload_text):
-            score += 30.0
-        if "http" in payload_text or host_text:
             score += 6.0
         score += sum(len(p.raw) for p in items) / 800.0
 
@@ -205,7 +190,11 @@ def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str
     merged = "\n".join(p.payload for p in flow_packets if p.payload)
     host_match = re.search(r"(?im)^(?:host|authority)\s*:\s*([^\s]+)", merged)
     if host_match:
-        return host_match.group(1)[:80]
+        host = host_match.group(1)[:80].lower()
+        for minor, keys in THIRD_PARTY_RULES.items():
+            if any(k in host for k in keys):
+                return minor
+        return host
     words = TOKEN_RE.findall(merged)
     return words[0][:30] if words else f"exp-{fallback_ip}"
 
@@ -220,14 +209,11 @@ def classify_flow(
         if cfg["server_ip"] == server_ip:
             return "自建AI", cfg["name"]
 
-    payload_text = "\n".join(pkt.payload.lower() for pkt in flow_packets if pkt.payload)
     sni_text = "\n".join((pkt.sni or "") for pkt in flow_packets if pkt.sni)
-    host_text = _extract_host_from_payload(flow_packets)
-
     if _is_https_flow(flow_packets, client_ip):
-        minor = _match_third_party_minor(sni_text, host_text, payload_text)
-        if minor:
-            return "三方AI", minor
+        for minor, keys in THIRD_PARTY_RULES.items():
+            if any(k in sni_text for k in keys):
+                return "三方AI", minor
 
     return "实验AI", _extract_minor_from_payload(flow_packets, server_ip)
 
@@ -301,20 +287,21 @@ def _build_entry(
     }
 
 
+
+
 def _is_valid_entry(entry: dict) -> bool:
-    latency_ms = entry.get("latency_ms") or 0
-    ttft_ms = entry.get("ttft_ms") or 0
-    ttfb_ms = entry.get("ttfb_ms") or 0
+    latency = entry.get("latency_ms")
+    ttft = entry.get("ttft_ms")
     input_tokens = entry.get("input_tokens") or 0
     output_tokens = entry.get("output_tokens") or 0
-    if latency_ms <= 0:
+
+    if latency is None or latency <= 0:
         return False
-    if ttft_ms <= 0 or ttfb_ms < 0:
+    if ttft is None or ttft <= 0:
         return False
     if input_tokens <= 0 or output_tokens <= 0:
         return False
     return True
-
 
 def parse_pcap_to_entries(
     pcap_path: Path,

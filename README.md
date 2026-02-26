@@ -17,14 +17,14 @@ python -m ai_gateway_demo --port 8000
 
 - 仓库已移除未使用的 `frontend/` 脚手架代码，统一以 `ai_gateway_demo/templates` 页面为准
 - 上传 pcap 并自动分析入库（无需手动 AI IP/阈值）
-- 清空历史 entry（会重置自增序号）
+- 清空历史 request（会重置自增序号）
 - 管理自建 AI 配置（新增/删除/清空，清空会重置序号）
 - 图表展示：
-  - AI 类别 Request 分布（环形图）
+  - AI 类别分布（环形图）
   - 时延均值对比（柱状图：TTFB/TTFT/Latency）
-  - 大类总 Token 分布（饼图）
-  - 大类按时间 Request 次数（折线图）
-- 支持按年月日、开始时间区间（相对秒）和 AI 大类进行筛选
+  - 输入输出 Token 分布（柱状图）
+  - Request 数时间变化图（折线图）
+- 支持按开始时间（真实时间）和 AI 大类进行筛选
 
 ## 指标说明
 
@@ -49,4 +49,4 @@ python -m ai_gateway_demo --port 8000
 
 ## 数据清洗规则
 
-- 自动剔除明显识别错误的 request：`latency<=0`、`ttft<=0`、输入 token 为 0 或输出 token 为 0。
+- 会剔除明显异常的 request：`latency <= 0`、`ttft <= 0`、`输入 token = 0` 或 `输出 token = 0`。
