@@ -1,0 +1,61 @@
+:root {
+  --glass: rgba(255, 255, 255, 0.56);
+  --line: rgba(255, 255, 255, 0.6);
+  --text: #172133;
+  --muted: #5f6e87;
+  --red: #e85d75;
+  --amber: #e8a429;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  color: var(--text);
+  background: linear-gradient(135deg, #eaf0ff 0%, #f7f9ff 40%, #eef7f4 100%);
+}
+.bg-glow { position: fixed; inset: -20% -10% auto -10%; height: 60vh; background: radial-gradient(circle, rgba(90,134,255,.35), transparent 65%); pointer-events: none; }
+.container { max-width: 1320px; margin: 32px auto; padding: 0 16px 48px; position: relative; z-index: 1; }
+.glass { background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border-radius: 24px; box-shadow: 0 12px 40px rgba(35, 53, 87, 0.15); }
+.hero { padding: 26px 28px; margin-bottom: 16px; }
+.hero h1 { margin: 0; font-size: 36px; }
+.hero p { margin: 8px 0 0; color: var(--muted); font-size: 15px; }
+.cards { display: grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.stat { padding: 16px 18px; }
+.stat h3 { margin: 0; font-size: 13px; color: var(--muted); }
+.stat p { margin: 10px 0 0; font-size: 32px; font-weight: 650; }
+.grid-two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+.panel { padding: 18px; }
+.panel h2 { margin: 0 0 12px; font-size: 20px; }
+input, select, button { border-radius: 14px; border: 1px solid rgba(53, 86, 140, .2); font: inherit; }
+input, select { width: 100%; padding: 12px; background: rgba(255,255,255,.65); }
+button { padding: 12px 16px; background: white; cursor: pointer; transition: .2s ease; }
+button:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(54, 93, 160, .2); }
+button:active { transform: translateY(0); }
+.btn-lg { min-height: 44px; min-width: 110px; font-weight: 600; }
+.actions { display: flex; gap: 10px; margin-top: 10px; margin-bottom: 10px; }
+button.danger { color: #fff; background: var(--red); }
+button.warn { color: #fff; background: var(--amber); }
+.ghost-btn { padding: 10px 14px; font-size: 13px; }
+.inline-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: center; margin-bottom: 10px; }
+.cfg-actions { display: flex; gap: 8px; grid-column: span 2; }
+.filter-form { display: grid; grid-template-columns: 130px 130px 1fr 1fr 160px auto auto; gap: 8px; align-items: center; }
+.date-mini { max-width: 130px; }
+.status { margin-top: 10px; color: var(--muted); }
+.chart-panel { min-height: 340px; }
+canvas { width: 100% !important; max-height: 280px; }
+table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; }
+th, td { border-bottom: 1px solid rgba(86,112,159,.18); padding: 10px; font-size: 12px; text-align: left; }
+th { color: #3f4f69; background: rgba(255,255,255,.5); position: sticky; top: 0; }
+tr:hover td { background: rgba(255,255,255,.55); }
+.upload-shell { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
+.upload-shell input[type="file"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
+.file-btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 14px; border-radius: 14px; background: linear-gradient(180deg, #f3f7ff 0%, #dde8ff 100%); border: 1px solid rgba(53,86,140,.2); color: #2f4d88; font-size: 13px; font-weight: 600; min-width: 96px; }
+.file-name { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.value-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.value-list li { display: flex; justify-content: space-between; font-size: 13px; color: #42516c; }
+.value-list strong { color: #1f2d46; }
+@media (max-width: 980px) {
+  .cards, .grid-two, .inline-form, .filter-form { grid-template-columns: 1fr; }
+  .cfg-actions { grid-column: span 1; }
+  .date-mini { max-width: none; }
+}
