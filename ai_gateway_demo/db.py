@@ -75,7 +75,23 @@ def init_db(db_path: Path = DB_PATH) -> None:
         conn.close()
 
 
+def _is_valid_entry_for_store(entry: dict[str, Any]) -> bool:
+    latency = entry.get("latency_ms")
+    ttft = entry.get("ttft_ms")
+    input_tokens = entry.get("input_tokens") or 0
+    output_tokens = entry.get("output_tokens") or 0
+    if latency is None or float(latency) <= 0:
+        return False
+    if ttft is None or float(ttft) <= 0:
+        return False
+    if int(input_tokens) <= 0 or int(output_tokens) <= 0:
+        return False
+    return True
+
+
 def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> None:
+    if not _is_valid_entry_for_store(entry):
+        return
     conn = get_conn(db_path)
     try:
         conn.execute(

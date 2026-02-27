@@ -28,8 +28,8 @@
         <form id="uploadForm">
           <label class="upload-shell" aria-label="PCAP 文件">
             <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
-            <span id="fileName" class="file-name file-name-btn">选择文件</span>
-            <span id="filePicked" class="file-name">未选择文件</span>
+            <span class="file-btn">选择文件</span>
+            <span id="fileName" class="file-name"></span>
           </label>
           <div class="actions">
             <button aria-label="上传并分析" type="submit">上传并分析</button>
@@ -71,7 +71,7 @@
       </form>
     </section>
 
-    <section class="grid-two">
+    <section class="grid-two charts-gap">
       <section class="glass panel chart-panel">
         <h2>AI 类别分布</h2>
         <canvas id="majorPie"></canvas>
@@ -84,12 +84,12 @@
 
     <section class="grid-two">
       <section class="glass panel chart-panel">
-        <h2>输入输出 Token 分布</h2>
-        <canvas id="tokenPie"></canvas>
+        <h2>输入输出 Token</h2>
+        <canvas id="tokenBar"></canvas>
       </section>
       <section class="glass panel chart-panel">
         <h2>Request 数时间变化图</h2>
-        <canvas id="majorLine"></canvas>
+        <canvas id="requestLine"></canvas>
       </section>
     </section>
 
@@ -176,18 +176,16 @@
         };
       });
 
-      drawCharts(stats.major_stats || [], entries);
+      drawCharts(stats.major_stats || [], stats, entries);
     }
 
-    function drawCharts(rows, entries) {
+    function drawCharts(rows, stats, entries) {
       const labels = rows.map(r => r.category_major);
       const counts = rows.map(r => r.total_entries);
       const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
       const ttft = rows.map(r => r.avg_ttft_ms || 0);
       const latency = rows.map(r => r.avg_latency_ms || 0);
-      const inputTokens = rows.map(r => r.total_input_tokens || 0);
-      const outputTokens = rows.map(r => r.total_output_tokens || 0);
-      const common = ['#8ec5ff', '#7af1ca', '#ffd486', '#f8a4ff', '#b5b8ff'];
+      const common = ['#7aa2ff', '#67d4b6', '#ffc56e', '#d7b8ff', '#89d0ff'];
 
       if (pieChart) pieChart.destroy();
       if (barChart) barChart.destroy();
@@ -196,8 +194,11 @@
 
       pieChart = new Chart(document.getElementById('majorPie'), {
         type: 'doughnut',
-        data: { labels, datasets: [{ data: counts, backgroundColor: common, borderWidth: 0, hoverBorderWidth: 0 }] },
-        options: { plugins: { legend: { position: 'bottom' } }, cutout: '62%' }
+        data: {
+          labels,
+          datasets: [{ data: counts, backgroundColor: common, borderWidth: 0, hoverOffset: 10 }],
+        },
+        options: { cutout: '62%', plugins: { legend: { position: 'bottom' } } }
       });
 
       barChart = new Chart(document.getElementById('latencyBar'), {
@@ -205,38 +206,51 @@
         data: {
           labels,
           datasets: [
-            { label: 'TTFB', data: ttfb, backgroundColor: '#90caf9' },
-            { label: 'TTFT', data: ttft, backgroundColor: '#80cbc4' },
-            { label: 'Latency', data: latency, backgroundColor: '#ffcc80' },
+            { label: 'TTFB', data: ttfb, backgroundColor: '#96beff' },
+            { label: 'TTFT', data: ttft, backgroundColor: '#86dfca' },
+            { label: 'Latency', data: latency, backgroundColor: '#ffd493' },
           ]
         },
         options: { responsive: true, scales: { y: { beginAtZero: true } } }
       });
 
-      tokenBarChart = new Chart(document.getElementById('tokenPie'), {
+      tokenBarChart = new Chart(document.getElementById('tokenBar'), {
         type: 'bar',
         data: {
-          labels,
-          datasets: [
-            { label: '输入 Token', data: inputTokens, backgroundColor: '#7bb6ff' },
-            { label: '输出 Token', data: outputTokens, backgroundColor: '#7ae0c4' },
-          ]
+          labels: ['输入Token', '输出Token'],
+          datasets: [{
+            data: [stats.total_input_tokens || 0, stats.total_output_tokens || 0],
+            backgroundColor: ['#7aa2ff', '#67d4b6'],
+            borderRadius: 10,
+            maxBarThickness: 62,
+          }]
         },
-        options: { responsive: true, scales: { y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } } }
+        options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
       });
 
-      const buckets = {};
+      const byMinute = {};
       for (const e of entries) {
         const t = (e.start_time_real || '').slice(0, 16);
         if (!t) continue;
-        buckets[t] = (buckets[t] || 0) + 1;
+        byMinute[t] = (byMinute[t] || 0) + 1;
       }
-      const times = Object.keys(buckets).sort();
-      const series = times.map(t => buckets[t]);
+      const times = Object.keys(byMinute).sort();
+      const series = times.map(t => byMinute[t]);
 
-      lineChart = new Chart(document.getElementById('majorLine'), {
+      lineChart = new Chart(document.getElementById('requestLine'), {
         type: 'line',
-        data: { labels: times, datasets: [{ label: 'Request数', data: series, borderColor: '#7ea9ff', backgroundColor: 'rgba(126,169,255,0.2)', fill: true, tension: 0.25 }] },
+        data: {
+          labels: times,
+          datasets: [{
+            label: 'Request数',
+            data: series,
+            borderColor: '#7aa2ff',
+            backgroundColor: 'rgba(122,162,255,.2)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
+          }]
+        },
         options: {
           responsive: true,
           scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
@@ -246,9 +260,7 @@
     }
 
     document.getElementById('pcapFile').onchange = (e) => {
-      const picked = e.target.files?.[0]?.name || '未选择文件';
-      document.getElementById('fileName').textContent = '重新选择';
-      document.getElementById('filePicked').textContent = picked;
+      document.getElementById('fileName').textContent = e.target.files?.[0]?.name || '';
     };
 
     document.getElementById('uploadForm').onsubmit = async (e) => {

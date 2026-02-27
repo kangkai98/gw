@@ -22,7 +22,7 @@ python -m ai_gateway_demo --port 8000
 - 图表展示：
   - AI 类别分布（环形图）
   - 时延均值对比（柱状图：TTFB/TTFT/Latency）
-  - 输入输出 Token 分布（柱状图）
+  - 输入输出 Token（柱状图）
   - Request 数时间变化图（折线图）
 - 支持按开始时间（真实时间）和 AI 大类进行筛选
 

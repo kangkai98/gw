@@ -157,33 +157,37 @@ def _is_https_flow(flow_packets: list[PacketMeta], client_ip: str) -> bool:
     return any(pkt.src == client_ip and pkt.sni for pkt in flow_packets)
 
 
-def _pick_flow(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> tuple[str, list[PacketMeta]]:
+def _flow_ai_score(flow_packets: list[PacketMeta], self_hosted_configs: list[dict]) -> float:
     self_hosted_ips = {cfg["server_ip"] for cfg in self_hosted_configs}
     all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
 
-    best_key = ""
-    best_score = float("-inf")
+    client_ip, server_ip = infer_direction(flow_packets)
+    text_payload = "\n".join(p.payload.lower() for p in flow_packets if p.payload)
+    sni_text = "\n".join((p.sni or "") for p in flow_packets if p.sni)
+
+    score = 0.0
+    if server_ip in self_hosted_ips:
+        score += 60.0
+    score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
+    score += 8.0 * sum(1 for kw in all_keywords if kw in text_payload)
+    if _is_https_flow(flow_packets, client_ip):
+        score += 6.0
+    score += sum(len(p.raw) for p in flow_packets) / 800.0
+    return score
+
+
+def _pick_flows(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> list[tuple[str, list[PacketMeta]]]:
+    ranked: list[tuple[str, list[PacketMeta], float]] = []
     for key, items in flows.items():
-        client_ip, server_ip = infer_direction(items)
-        text = "\n".join(p.payload.lower() for p in items if p.payload)
-        sni_text = "\n".join((p.sni or "") for p in items if p.sni)
+        ranked.append((key, items, _flow_ai_score(items, self_hosted_configs)))
 
-        score = 0.0
-        if server_ip in self_hosted_ips:
-            score += 60.0
-        score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
-        score += 8.0 * sum(1 for kw in all_keywords if kw in text)
-        if _is_https_flow(items, client_ip):
-            score += 6.0
-        score += sum(len(p.raw) for p in items) / 800.0
-
-        if score > best_score:
-            best_score = score
-            best_key = key
-
-    if not best_key:
-        raise ValueError("No TCP flow found in pcap")
-    return best_key, flows[best_key]
+    ranked.sort(key=lambda x: x[2], reverse=True)
+    selected = [(k, items) for k, items, score in ranked if score >= 10.0]
+    if selected:
+        return selected
+    if ranked:
+        return [(ranked[0][0], ranked[0][1])]
+    return []
 
 
 def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str) -> str:
@@ -311,10 +315,23 @@ def parse_pcap_to_entries(
     if not packets:
         return []
     flows = group_bi_flows(packets)
-    flow_key, ai_flow = _pick_flow(flows, self_hosted_configs=self_hosted_configs)
-    client_ip, server_ip = infer_direction(ai_flow)
-    major, minor = classify_flow(ai_flow, client_ip=client_ip, server_ip=server_ip, self_hosted_configs=self_hosted_configs)
-    chunks = split_entries(ai_flow)
+    picked_flows = _pick_flows(flows, self_hosted_configs=self_hosted_configs)
     base_ts = packets[0].ts
-    entries = [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]
+
+    entries: list[dict] = []
+    for flow_key, ai_flow in picked_flows:
+        client_ip, server_ip = infer_direction(ai_flow)
+        major, minor = classify_flow(
+            ai_flow,
+            client_ip=client_ip,
+            server_ip=server_ip,
+            self_hosted_configs=self_hosted_configs,
+        )
+        chunks = split_entries(ai_flow)
+        entries.extend(
+            _build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts)
+            for c in chunks
+            if c
+        )
+
     return [entry for entry in entries if _is_valid_entry(entry)]
