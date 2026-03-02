@@ -50,3 +50,11 @@ python -m ai_gateway_demo --port 8000
 ## 数据清洗规则
 
 - 会剔除明显异常的 request：`latency <= 0`、`ttft <= 0`、`输入 token = 0` 或 `输出 token = 0`。
+
+
+## 识别与切分算法（重构版）
+
+- **多 AI 流识别**：先对每条双向 TCP 流抽取特征（SNI/Host 关键词命中、上下行字节平衡、token-like 下行报文、HTTPS 指纹、自建IP命中等），再计算 AI 相关性分数。
+- **动态阈值选流**：不再只选 1 条流，而是采用 `max(14, top_score * 0.35)` 作为动态门限，选出同一 pcap 中多条高置信 AI 流；若都不达标再回退到 top1。
+- **一问一答切分**：在单条 AI 流内，先基于上行请求报文间隔的中位数自适应计算阈值（约 `2.2 * median_gap`，下限 1s），识别请求起点；再按起点区间聚合对应下行响应形成 turn。
+- **防误识别清洗**：仅保留 `latency > 0`、`ttft > 0`、`input_tokens > 0`、`output_tokens > 0` 的条目（解析层与入库层双重校验）。
