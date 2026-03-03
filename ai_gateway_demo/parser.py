@@ -23,24 +23,12 @@ THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
     "deepseek": ("deepseek",),
 }
 HEADER_LIKE_PREFIXES = ("http/", "content-", "date:", "server:", "x-", ":status")
-REQUEST_HINTS = (
-    "prompt",
-    "messages",
-    "question",
-    "query",
-    "input",
-    "instruction",
-    "ask",
-)
-RESPONSE_HINTS = (
-    "choices",
-    "delta",
-    "content",
-    "answer",
-    "output",
-    "response",
-    "reply",
-)
+
+# TLS record content types (first byte of TLS record)
+TLS_HANDSHAKE = 0x16
+TLS_APPDATA = 0x17
+TLS_ALERT = 0x15
+TLS_CCS = 0x14
 
 
 @dataclass
@@ -63,20 +51,21 @@ def decode_payload(raw_bytes: bytes) -> str:
 
 
 def fmt_real_time(ts: float) -> str:
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    dt = datetime.fromtimestamp(ts)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _extract_tls_sni(raw: bytes) -> str | None:
     if len(raw) < 10:
         return None
     try:
-        if raw[0] != 0x16:
+        if raw[0] != 0x16:  # TLS handshake
             return None
         idx = 5
-        if raw[idx] != 0x01:
+        if raw[idx] != 0x01:  # client hello
             return None
-        idx += 4
-        idx += 2 + 32
+        idx += 4  # hs type + hs len
+        idx += 2 + 32  # version + random
         session_len = raw[idx]
         idx += 1 + session_len
         cs_len = int.from_bytes(raw[idx : idx + 2], "big")
@@ -112,6 +101,28 @@ def _extract_tls_sni(raw: bytes) -> str | None:
     return None
 
 
+def _tls_content_type(raw: bytes) -> int | None:
+    # TLS record: type(1) + version(2) + length(2) + ...
+    if not raw or len(raw) < 5:
+        return None
+    t = raw[0]
+    if t in (TLS_HANDSHAKE, TLS_APPDATA, TLS_ALERT, TLS_CCS):
+        return t
+    return None
+
+
+def _is_tls_appdata(pkt: PacketMeta) -> bool:
+    return _tls_content_type(pkt.raw) == TLS_APPDATA
+
+
+def _is_app_payload(pkt: PacketMeta, is_https: bool) -> bool:
+    # HTTPS: only TLS application_data are "real app" bytes for request/response
+    if is_https:
+        return _is_tls_appdata(pkt)
+    # HTTP/plain: any TCP payload counts
+    return len(pkt.raw) > 0
+
+
 def extract_packets(pcap_path: Path) -> list[PacketMeta]:
     packets = rdpcap(str(pcap_path))
     result: list[PacketMeta] = []
@@ -121,13 +132,15 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
         ip = p[IP]
         tcp = p[TCP]
         raw_bytes = bytes(tcp[Raw]) if Raw in tcp else b""
+        payload = decode_payload(raw_bytes)
+        flow_key = f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}"
         result.append(
             PacketMeta(
                 ts=float(p.time),
                 src=ip.src,
                 dst=ip.dst,
-                payload=decode_payload(raw_bytes),
-                flow_key=f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}",
+                payload=payload,
+                flow_key=flow_key,
                 raw=raw_bytes,
                 sni=_extract_tls_sni(raw_bytes),
             )
@@ -139,13 +152,60 @@ def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
     groups: dict[str, list[PacketMeta]] = defaultdict(list)
     for p in pkts:
         left, right = p.flow_key.split("-")
-        a, b = tuple(left.split(":")), tuple(right.split(":"))
-        side1, side2 = ":".join(a), ":".join(b)
+        a = tuple(left.split(":"))
+        b = tuple(right.split(":"))
+        side1 = ":".join(a)
+        side2 = ":".join(b)
         groups[f"{side1}-{side2}" if a <= b else f"{side2}-{side1}"].append(p)
     return groups
 
 
 def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
+    """
+    Original version picked the smaller-byte side as client. That can fail for AI streaming (downstream >> upstream).
+    We improve:
+    - Prefer the side that sends TLS ClientHello (SNI exists) as client.
+    - Else fall back to ephemeral-port heuristic.
+    - Else fall back to smaller-byte side.
+    """
+    ips = sorted({p.src for p in flow_packets} | {p.dst for p in flow_packets})
+    if len(ips) < 2:
+        return (ips[0], ips[0]) if ips else ("", "")
+
+    # 1) TLS ClientHello (with SNI) usually from client
+    sni_senders = [p.src for p in flow_packets if p.sni]
+    if sni_senders:
+        client = max(set(sni_senders), key=sni_senders.count)
+        server = next((ip for ip in ips if ip != client), client)
+        return client, server
+
+    # 2) ephemeral-port heuristic: client likely uses high source port, server likely uses low dest port (443/80/etc)
+    port_by_ip: dict[str, list[int]] = defaultdict(list)
+    for p in flow_packets:
+        # parse from flow_key: "ip:sport-ip:dport"
+        left, right = p.flow_key.split("-")
+        src_ip, sport = left.rsplit(":", 1)
+        dst_ip, dport = right.rsplit(":", 1)
+        try:
+            port_by_ip[src_ip].append(int(sport))
+            port_by_ip[dst_ip].append(int(dport))
+        except Exception:
+            continue
+    if len(port_by_ip) >= 2:
+        # client tends to have higher median ports
+        def _median(xs: list[int]) -> float:
+            xs2 = sorted(xs)
+            if not xs2:
+                return 0.0
+            mid = len(xs2) // 2
+            return float(xs2[mid]) if len(xs2) % 2 else (xs2[mid - 1] + xs2[mid]) / 2.0
+
+        med = {ip: _median(ports) for ip, ports in port_by_ip.items()}
+        client = max(med, key=med.get)
+        server = next((ip for ip in ips if ip != client), client)
+        return client, server
+
+    # 3) fallback: smaller bytes side as client
     byte_by_src: dict[str, int] = defaultdict(int)
     for pkt in flow_packets:
         byte_by_src[pkt.src] += len(pkt.raw)
@@ -154,51 +214,21 @@ def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
     return client, server
 
 
+def split_entries(flow_packets: list[PacketMeta], gap_threshold: float = 2.0) -> list[list[PacketMeta]]:
+    if not flow_packets:
+        return []
+    entries = [[flow_packets[0]]]
+    for pkt in flow_packets[1:]:
+        if pkt.ts - entries[-1][-1].ts > gap_threshold:
+            entries.append([pkt])
+        else:
+            entries[-1].append(pkt)
+    return entries
+
+
 def _is_https_flow(flow_packets: list[PacketMeta], client_ip: str) -> bool:
+    # TLS ClientHello with SNI indicates https
     return any(pkt.src == client_ip and pkt.sni for pkt in flow_packets)
-
-
-def _flow_ai_score(flow_packets: list[PacketMeta], self_hosted_configs: list[dict]) -> float:
-    self_hosted_ips = {cfg["server_ip"] for cfg in self_hosted_configs}
-    all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
-    client_ip, server_ip = infer_direction(flow_packets)
-
-    payload_text = "\n".join(p.payload.lower() for p in flow_packets if p.payload)
-    sni_text = "\n".join((p.sni or "") for p in flow_packets if p.sni)
-
-    up = [p for p in flow_packets if p.src == client_ip and p.payload]
-    down = [p for p in flow_packets if p.src == server_ip and p.payload]
-
-    score = 0.0
-    if server_ip in self_hosted_ips:
-        score += 70.0
-    score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
-    score += 10.0 * sum(1 for kw in all_keywords if kw in payload_text)
-    score += 8.0 * sum(1 for kw in REQUEST_HINTS if kw in payload_text)
-    score += 8.0 * sum(1 for kw in RESPONSE_HINTS if kw in payload_text)
-
-    if _is_https_flow(flow_packets, client_ip):
-        score += 8.0
-    if up and down:
-        score += 6.0
-    score += min(sum(len(p.raw) for p in flow_packets) / 900.0, 12.0)
-    return score
-
-
-def _pick_flows(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> list[tuple[str, list[PacketMeta]]]:
-    ranked = sorted(
-        ((key, items, _flow_ai_score(items, self_hosted_configs)) for key, items in flows.items()),
-        key=lambda x: x[2],
-        reverse=True,
-    )
-
-    strong = [(k, it) for k, it, score in ranked if score >= 18.0]
-    if strong:
-        return strong
-    medium = [(k, it) for k, it, score in ranked if score >= 10.0][:2]
-    if medium:
-        return medium
-    return [(ranked[0][0], ranked[0][1])] if ranked else []
 
 
 def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str) -> str:
@@ -214,7 +244,12 @@ def _extract_minor_from_payload(flow_packets: list[PacketMeta], fallback_ip: str
     return words[0][:30] if words else f"exp-{fallback_ip}"
 
 
-def classify_flow(flow_packets: list[PacketMeta], client_ip: str, server_ip: str, self_hosted_configs: list[dict]) -> tuple[str, str]:
+def classify_flow(
+    flow_packets: list[PacketMeta],
+    client_ip: str,
+    server_ip: str,
+    self_hosted_configs: list[dict],
+) -> tuple[str, str]:
     for cfg in self_hosted_configs:
         if cfg["server_ip"] == server_ip:
             return "自建AI", cfg["name"]
@@ -236,48 +271,119 @@ def _has_token_payload(payload: str) -> bool:
         return False
     if any(lowered.startswith(prefix) for prefix in HEADER_LIKE_PREFIXES):
         return False
-    if lowered.startswith("{") and "choices" not in lowered and "content" not in lowered and "answer" not in lowered:
+    if lowered.startswith("{") and "choices" not in lowered and "content" not in lowered:
         return False
     return count_tokens(payload) > 0
 
 
-def split_entries(flow_packets: list[PacketMeta], client_ip: str, server_ip: str) -> list[list[PacketMeta]]:
-    """Segment one AI flow into Q/A turns via state machine, not fixed gap only."""
-    ordered = sorted(flow_packets, key=lambda p: p.ts)
-    if not ordered:
-        return []
+def _find_stream_start(
+    down_app: list[PacketMeta],
+    req_end_ts: float,
+    *,
+    gap_before_s: float = 0.35,
+    lookahead_s: float = 1.2,
+    small_len_max: int = 320,
+    small_need: int = 6,
+    start_len_min: int = 400,
+) -> PacketMeta | None:
+    """
+    Find "streaming start" packet for AI responses:
+    - noticeable idle gap before it (gap_before_s)
+    - the start packet tends to be larger (start_len_min)
+    - followed by a burst of small packets (<= small_len_max) within lookahead_s (at least small_need)
+    """
+    d = [p for p in down_app if p.ts >= req_end_ts]
+    if len(d) < 2:
+        return None
 
-    entries: list[list[PacketMeta]] = []
-    current: list[PacketMeta] = []
-    has_response = False
-    last_ts = ordered[0].ts
+    for i in range(1, len(d)):
+        prev = d[i - 1]
+        cur = d[i]
+        if cur.ts <= req_end_ts:
+            continue
 
-    for pkt in ordered:
-        idle = pkt.ts - last_ts
-        direction_up = pkt.src == client_ip
-        has_payload = bool(pkt.payload)
+        gap = cur.ts - prev.ts
+        if gap < gap_before_s:
+            continue
+        if len(cur.raw) < start_len_min:
+            continue
 
-        start_new = False
-        if not current:
-            start_new = True
-        elif has_response and direction_up and has_payload:
-            start_new = True
-        elif idle > 3.0 and direction_up and has_payload:
-            start_new = True
+        t_end = cur.ts + lookahead_s
+        small_cnt = 0
+        j = i + 1
+        while j < len(d) and d[j].ts <= t_end:
+            if 0 < len(d[j].raw) <= small_len_max:
+                small_cnt += 1
+            j += 1
 
-        if start_new and current:
-            entries.append(current)
-            current = []
-            has_response = False
+        if small_cnt >= small_need:
+            return cur
 
-        current.append(pkt)
-        if pkt.src == server_ip and has_payload:
-            has_response = True
-        last_ts = pkt.ts
+    return None
 
-    if current:
-        entries.append(current)
-    return entries
+
+def _streaming_score(flow_items: list[PacketMeta], client_ip: str) -> float:
+    """
+    Score a TCP bi-flow by presence of streaming pattern in server->client app payload.
+    This helps pick the correct AI flow among many connections.
+    """
+    is_https = _is_https_flow(flow_items, client_ip)
+    up_app = [p for p in flow_items if p.src == client_ip and _is_app_payload(p, is_https)]
+    down_app = [p for p in flow_items if p.src != client_ip and _is_app_payload(p, is_https)]
+    if not up_app or not down_app:
+        return 0.0
+
+    req_start_ts = up_app[0].ts
+    first_down = next((p for p in down_app if p.ts > req_start_ts), None)
+    if first_down is not None:
+        candidates = [p for p in up_app if p.ts < first_down.ts]
+        req_end_ts = candidates[-1].ts if candidates else up_app[-1].ts
+    else:
+        req_end_ts = up_app[-1].ts
+
+    start = _find_stream_start(down_app, req_end_ts)
+    if not start:
+        return 0.0
+
+    # more small packets -> higher confidence
+    t_end = start.ts + 1.0
+    small_cnt = sum(1 for p in down_app if start.ts < p.ts <= t_end and 0 < len(p.raw) <= 320)
+
+    return 60.0 + min(small_cnt, 20) * 3.0
+
+
+def _pick_flow(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> tuple[str, list[PacketMeta]]:
+    self_hosted_ips = {cfg["server_ip"] for cfg in self_hosted_configs}
+    all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
+
+    best_key = ""
+    best_score = float("-inf")
+    for key, items in flows.items():
+        client_ip, server_ip = infer_direction(items)
+        text = "\n".join(p.payload.lower() for p in items if p.payload)
+        sni_text = "\n".join((p.sni or "") for p in items if p.sni)
+
+        score = 0.0
+        if server_ip in self_hosted_ips:
+            score += 60.0
+        score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
+        score += 8.0 * sum(1 for kw in all_keywords if kw in text)
+
+        # Streaming pattern boost (key improvement)
+        score += _streaming_score(items, client_ip)
+
+        # HTTPS preference & traffic volume
+        if _is_https_flow(items, client_ip):
+            score += 6.0
+        score += sum(len(p.raw) for p in items) / 800.0
+
+        if score > best_score:
+            best_score = score
+            best_key = key
+
+    if not best_key:
+        raise ValueError("No TCP flow found in pcap")
+    return best_key, flows[best_key]
 
 
 def _build_entry(
@@ -290,90 +396,139 @@ def _build_entry(
     base_ts: float,
 ) -> dict:
     ordered = sorted(entry_packets, key=lambda p: p.ts)
-    up = [p for p in ordered if p.src == client_ip]
-    down_all = [p for p in ordered if p.src == server_ip]
+    is_https = _is_https_flow(ordered, client_ip)
 
-    start_pkt = next((p for p in up if p.payload), None) or (up[0] if up else ordered[0])
-    start_ts = start_pkt.ts
-    down_after_start = [p for p in down_all if p.ts >= start_ts and p.payload]
+    # Only consider "application" payload:
+    # - HTTPS: TLS application_data records
+    # - HTTP: any TCP payload
+    up_app = [p for p in ordered if p.src == client_ip and _is_app_payload(p, is_https)]
+    down_app = [p for p in ordered if p.src == server_ip and _is_app_payload(p, is_https)]
 
-    first_down_pkt = next((p for p in down_after_start if p.ts > start_ts), None)
-    first_token_pkt = next((p for p in down_after_start if _has_token_payload(p.payload) and p.ts > start_ts), None)
-    last_down = down_after_start[-1] if down_after_start else None
+    # Request start: first client app payload
+    start_pkt = up_app[0] if up_app else ordered[0]
+    req_start_ts = start_pkt.ts
 
-    ttfb_s = max(first_down_pkt.ts - start_ts, 0.0) if first_down_pkt else None
-    ttft_s = max(first_token_pkt.ts - start_ts, 0.0) if first_token_pkt else None
-    latency_s = max(last_down.ts - start_ts, 0.0) if last_down else None
+    # First server app payload after request starts (response begins)
+    first_down = next((p for p in down_app if p.ts > req_start_ts), None)
 
+    # Request end: last client app payload strictly before first_down (real "upload finished")
+    if up_app:
+        if first_down is not None:
+            candidates = [p for p in up_app if p.ts < first_down.ts]
+            req_end_pkt = candidates[-1] if candidates else up_app[-1]
+        else:
+            req_end_pkt = up_app[-1]
+    else:
+        req_end_pkt = start_pkt
+    req_end_ts = req_end_pkt.ts
+
+    # TTFB: req_end -> first server app payload
+    first_down_after_end = next((p for p in down_app if p.ts > req_end_ts), None) or next(
+        (p for p in down_app if p.ts >= req_end_ts), None
+    )
+    ttfb_s = max((first_down_after_end.ts - req_end_ts), 0.0) if first_down_after_end else None
+
+    # TTFT: req_end -> streaming start (gap + big packet + small packet burst)
+    stream_start = _find_stream_start(
+        down_app,
+        req_end_ts,
+        gap_before_s=0.35,
+        lookahead_s=1.2,
+        small_len_max=320,
+        small_need=6,
+        start_len_min=400,
+    )
+    if stream_start is not None:
+        ttft_s = max(stream_start.ts - req_end_ts, 0.0)
+    else:
+        # Fallback (plaintext only): first token-like payload; else fallback to first_down_after_end
+        down_after_end_all = [p for p in ordered if p.src == server_ip and p.ts >= req_end_ts]
+        first_token_pkt = (
+            next((p for p in down_after_end_all if _has_token_payload(p.payload) and p.ts > req_end_ts), None)
+            or next((p for p in down_after_end_all if _has_token_payload(p.payload)), None)
+        )
+        if first_token_pkt is not None:
+            ttft_s = max(first_token_pkt.ts - req_end_ts, 0.0)
+        elif first_down_after_end is not None:
+            ttft_s = max(first_down_after_end.ts - req_end_ts, 0.0)
+        else:
+            ttft_s = None
+
+    # Ensure TTFT >= TTFB
     if ttft_s is not None and ttfb_s is not None and ttft_s < ttfb_s:
         ttft_s = ttfb_s
 
-    input_tokens = sum(count_tokens(p.payload) for p in up if p.payload)
-    output_tokens = sum(count_tokens(p.payload) for p in down_after_start if p.payload)
+    # Latency: req_end -> last server app payload (response complete)
+    down_after_end = [p for p in down_app if p.ts >= req_end_ts]
+    last_down = down_after_end[-1] if down_after_end else (down_app[-1] if down_app else ordered[-1])
+    latency_s = max((last_down.ts - req_end_ts), 0.0) if last_down else None
 
-    tpot_ms = None
+    # Token stats (works for plaintext; HTTPS likely yields 0 due to encryption)
+    up_all = [p for p in ordered if p.src == client_ip]
+    input_tokens = sum(count_tokens(p.payload) for p in up_all)
+
+    down_all_after_end = [p for p in ordered if p.src == server_ip and p.ts >= req_end_ts]
+    output_tokens = sum(count_tokens(p.payload) for p in down_all_after_end)
+
     if latency_s is not None and ttft_s is not None and output_tokens > 0:
         tpot_ms = max((latency_s - ttft_s) * 1000, 0) / output_tokens
+    else:
+        tpot_ms = None
 
-    end_ts = last_down.ts if last_down else start_ts
     return {
         "category_major": major,
         "category_minor": minor,
         "flow_key": flow_key,
-        "start_time_real": fmt_real_time(start_ts),
-        "end_time_real": fmt_real_time(end_ts),
-        "start_time_rel_s": round(start_ts - base_ts, 1),
+
+        "start_time_real": fmt_real_time(req_start_ts),
+        "end_time_real": fmt_real_time(last_down.ts if last_down else req_start_ts),
+        "start_time_rel_s": round(req_start_ts - base_ts, 1),
+
+        # Metrics start at "request finished uploading"
         "ttfb_ms": round(ttfb_s * 1000, 1) if ttfb_s is not None else None,
         "ttft_ms": round(ttft_s * 1000, 1) if ttft_s is not None else None,
         "latency_ms": round(latency_s * 1000, 1) if latency_s is not None else None,
+
         "tpot_ms_per_token": round(tpot_ms, 1) if tpot_ms is not None else None,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+
+        # Helpful debug fields
+        "req_send_ms": round((req_end_ts - req_start_ts) * 1000, 1),
+        "is_https": is_https,
+        "stream_start_real": fmt_real_time(stream_start.ts) if stream_start else None,
     }
 
 
 def _is_valid_entry(entry: dict) -> bool:
     latency = entry.get("latency_ms")
-    ttfb = entry.get("ttfb_ms")
     ttft = entry.get("ttft_ms")
     input_tokens = entry.get("input_tokens") or 0
     output_tokens = entry.get("output_tokens") or 0
 
     if latency is None or latency <= 0:
         return False
-    if ttfb is None or ttfb < 0:
-        return False
     if ttft is None or ttft <= 0:
         return False
-    if ttft < ttfb:
-        return False
     if input_tokens <= 0 or output_tokens <= 0:
+        # if you want to allow HTTPS (encrypted) flows, relax this condition.
         return False
     return True
 
 
-def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+def parse_pcap_to_entries(
+    pcap_path: Path,
+    self_hosted_configs: list[dict],
+) -> list[dict]:
     packets = extract_packets(pcap_path)
     if not packets:
         return []
-
     flows = group_bi_flows(packets)
-    picked_flows = _pick_flows(flows, self_hosted_configs=self_hosted_configs)
+    flow_key, ai_flow = _pick_flow(flows, self_hosted_configs=self_hosted_configs)
+    client_ip, server_ip = infer_direction(ai_flow)
+    major, minor = classify_flow(ai_flow, client_ip=client_ip, server_ip=server_ip, self_hosted_configs=self_hosted_configs)
+
+    chunks = split_entries(ai_flow)
     base_ts = packets[0].ts
-
-    entries: list[dict] = []
-    for flow_key, ai_flow in picked_flows:
-        client_ip, server_ip = infer_direction(ai_flow)
-        major, minor = classify_flow(
-            ai_flow,
-            client_ip=client_ip,
-            server_ip=server_ip,
-            self_hosted_configs=self_hosted_configs,
-        )
-        turns = split_entries(ai_flow, client_ip=client_ip, server_ip=server_ip)
-        for turn in turns:
-            entry = _build_entry(turn, client_ip, server_ip, flow_key, major, minor, base_ts)
-            if _is_valid_entry(entry):
-                entries.append(entry)
-
-    return entries
+    entries = [_build_entry(c, client_ip, server_ip, flow_key, major, minor, base_ts) for c in chunks if c]
+    return [entry for entry in entries if _is_valid_entry(entry)]
