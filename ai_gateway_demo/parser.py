@@ -9,6 +9,9 @@ from typing import Iterable
 
 from scapy.all import IP, TCP, Raw, rdpcap
 
+# ====== switches ======
+DEBUG_PRINT = True  # set False to silence per-entry prints
+
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
     "qwen api": ("qwen", "dashscope", "aliyun"),
@@ -162,11 +165,10 @@ def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
 
 def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
     """
-    Original version picked the smaller-byte side as client. That can fail for AI streaming (downstream >> upstream).
-    We improve:
+    Return (client_ip, server_ip)
     - Prefer the side that sends TLS ClientHello (SNI exists) as client.
-    - Else fall back to ephemeral-port heuristic.
-    - Else fall back to smaller-byte side.
+    - Else ephemeral-port heuristic.
+    - Else smaller-byte side as client.
     """
     ips = sorted({p.src for p in flow_packets} | {p.dst for p in flow_packets})
     if len(ips) < 2:
@@ -179,10 +181,9 @@ def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
         server = next((ip for ip in ips if ip != client), client)
         return client, server
 
-    # 2) ephemeral-port heuristic: client likely uses high source port, server likely uses low dest port (443/80/etc)
+    # 2) ephemeral-port heuristic
     port_by_ip: dict[str, list[int]] = defaultdict(list)
     for p in flow_packets:
-        # parse from flow_key: "ip:sport-ip:dport"
         left, right = p.flow_key.split("-")
         src_ip, sport = left.rsplit(":", 1)
         dst_ip, dport = right.rsplit(":", 1)
@@ -192,7 +193,7 @@ def infer_direction(flow_packets: list[PacketMeta]) -> tuple[str, str]:
         except Exception:
             continue
     if len(port_by_ip) >= 2:
-        # client tends to have higher median ports
+
         def _median(xs: list[int]) -> float:
             xs2 = sorted(xs)
             if not xs2:
@@ -227,7 +228,6 @@ def split_entries(flow_packets: list[PacketMeta], gap_threshold: float = 2.0) ->
 
 
 def _is_https_flow(flow_packets: list[PacketMeta], client_ip: str) -> bool:
-    # TLS ClientHello with SNI indicates https
     return any(pkt.src == client_ip and pkt.sni for pkt in flow_packets)
 
 
@@ -278,7 +278,7 @@ def _has_token_payload(payload: str) -> bool:
 
 def _find_stream_start(
     down_app: list[PacketMeta],
-    req_end_ts: float,
+    anchor_ts: float,
     *,
     gap_before_s: float = 0.35,
     lookahead_s: float = 1.2,
@@ -287,22 +287,21 @@ def _find_stream_start(
     start_len_min: int = 400,
 ) -> PacketMeta | None:
     """
-    Find "streaming start" packet for AI responses:
-    - noticeable idle gap before it (gap_before_s)
-    - the start packet tends to be larger (start_len_min)
-    - followed by a burst of small packets (<= small_len_max) within lookahead_s (at least small_need)
+    Streaming-start detection:
+    - anchor_ts: search start time (we'll pass req_start_ts or req_end_ts depending on metric definition)
+    - allow d[0] as candidate; for i==0, gap measured against anchor_ts
     """
-    d = [p for p in down_app if p.ts >= req_end_ts]
-    if len(d) < 2:
+    d = [p for p in down_app if p.ts >= anchor_ts]
+    if not d:
         return None
 
-    for i in range(1, len(d)):
-        prev = d[i - 1]
+    for i in range(len(d)):
         cur = d[i]
-        if cur.ts <= req_end_ts:
+        if cur.ts <= anchor_ts:
             continue
 
-        gap = cur.ts - prev.ts
+        prev_ts = d[i - 1].ts if i > 0 else anchor_ts
+        gap = cur.ts - prev_ts
         if gap < gap_before_s:
             continue
         if len(cur.raw) < start_len_min:
@@ -323,10 +322,6 @@ def _find_stream_start(
 
 
 def _streaming_score(flow_items: list[PacketMeta], client_ip: str) -> float:
-    """
-    Score a TCP bi-flow by presence of streaming pattern in server->client app payload.
-    This helps pick the correct AI flow among many connections.
-    """
     is_https = _is_https_flow(flow_items, client_ip)
     up_app = [p for p in flow_items if p.src == client_ip and _is_app_payload(p, is_https)]
     down_app = [p for p in flow_items if p.src != client_ip and _is_app_payload(p, is_https)]
@@ -341,11 +336,11 @@ def _streaming_score(flow_items: list[PacketMeta], client_ip: str) -> float:
     else:
         req_end_ts = up_app[-1].ts
 
-    start = _find_stream_start(down_app, req_end_ts)
+    # flow scoring still anchors from req_end_ts (better isolates "server start streaming" behavior)
+    start = _find_stream_start(down_app, req_end_ts, small_len_max=320, small_need=6, start_len_min=400)
     if not start:
         return 0.0
 
-    # more small packets -> higher confidence
     t_end = start.ts + 1.0
     small_cnt = sum(1 for p in down_app if start.ts < p.ts <= t_end and 0 < len(p.raw) <= 320)
 
@@ -369,10 +364,8 @@ def _pick_flow(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dic
         score += 20.0 * sum(1 for kw in all_keywords if kw in sni_text)
         score += 8.0 * sum(1 for kw in all_keywords if kw in text)
 
-        # Streaming pattern boost (key improvement)
         score += _streaming_score(items, client_ip)
 
-        # HTTPS preference & traffic volume
         if _is_https_flow(items, client_ip):
             score += 6.0
         score += sum(len(p.raw) for p in items) / 800.0
@@ -398,23 +391,23 @@ def _build_entry(
     ordered = sorted(entry_packets, key=lambda p: p.ts)
     is_https = _is_https_flow(ordered, client_ip)
 
-    # Only consider "application" payload:
-    # - HTTPS: TLS application_data records
-    # - HTTP: any TCP payload
     up_app = [p for p in ordered if p.src == client_ip and _is_app_payload(p, is_https)]
     down_app = [p for p in ordered if p.src == server_ip and _is_app_payload(p, is_https)]
 
-    # Request start: first client app payload
+    # Request start
     start_pkt = up_app[0] if up_app else ordered[0]
     req_start_ts = start_pkt.ts
 
-    # First server app payload after request starts (response begins)
-    first_down = next((p for p in down_app if p.ts > req_start_ts), None)
+    # First server app payload after request starts
+    first_down_after_start = next((p for p in down_app if p.ts > req_start_ts), None) or next(
+        (p for p in down_app if p.ts >= req_start_ts), None
+    )
 
-    # Request end: last client app payload strictly before first_down (real "upload finished")
+    # Request end (upload finished) - keep for debug only
+    first_down_any = next((p for p in down_app if p.ts > req_start_ts), None)
     if up_app:
-        if first_down is not None:
-            candidates = [p for p in up_app if p.ts < first_down.ts]
+        if first_down_any is not None:
+            candidates = [p for p in up_app if p.ts < first_down_any.ts]
             req_end_pkt = candidates[-1] if candidates else up_app[-1]
         else:
             req_end_pkt = up_app[-1]
@@ -422,58 +415,74 @@ def _build_entry(
         req_end_pkt = start_pkt
     req_end_ts = req_end_pkt.ts
 
-    # TTFB: req_end -> first server app payload
-    first_down_after_end = next((p for p in down_app if p.ts > req_end_ts), None) or next(
-        (p for p in down_app if p.ts >= req_end_ts), None
-    )
-    ttfb_s = max((first_down_after_end.ts - req_end_ts), 0.0) if first_down_after_end else None
+    # ====== CHANGE: metrics start time = req_start_ts ======
 
-    # TTFT: req_end -> streaming start (gap + big packet + small packet burst)
+    # --- TTFB: req_start -> first server app payload ---
+    ttfb_start_pkt = start_pkt
+    ttfb_end_pkt = first_down_after_start
+    ttfb_s = max((ttfb_end_pkt.ts - req_start_ts), 0.0) if ttfb_end_pkt else None
+
+    # --- TTFT: req_start -> streaming start ---
+    # NOTE: we anchor streaming detection at req_start_ts to match your new definition
     stream_start = _find_stream_start(
         down_app,
-        req_end_ts,
+        req_start_ts,
         gap_before_s=0.35,
         lookahead_s=1.2,
-        small_len_max=320,
+        small_len_max=700,
         small_need=6,
         start_len_min=400,
     )
-    if stream_start is not None:
-        ttft_s = max(stream_start.ts - req_end_ts, 0.0)
-    else:
-        # Fallback (plaintext only): first token-like payload; else fallback to first_down_after_end
-        down_after_end_all = [p for p in ordered if p.src == server_ip and p.ts >= req_end_ts]
-        first_token_pkt = (
-            next((p for p in down_after_end_all if _has_token_payload(p.payload) and p.ts > req_end_ts), None)
-            or next((p for p in down_after_end_all if _has_token_payload(p.payload)), None)
-        )
-        if first_token_pkt is not None:
-            ttft_s = max(first_token_pkt.ts - req_end_ts, 0.0)
-        elif first_down_after_end is not None:
-            ttft_s = max(first_down_after_end.ts - req_end_ts, 0.0)
-        else:
-            ttft_s = None
+    ttft_start_pkt = start_pkt
 
-    # Ensure TTFT >= TTFB
+    if stream_start is not None:
+        ttft_end_pkt = stream_start
+        ttft_s = max(ttft_end_pkt.ts - req_start_ts, 0.0)
+    else:
+        # fallback (plaintext only): first token-like payload; else fallback to first_down_after_start
+        down_after_start_all = [p for p in ordered if p.src == server_ip and p.ts >= req_start_ts]
+        first_token_pkt = (
+            next((p for p in down_after_start_all if _has_token_payload(p.payload) and p.ts > req_start_ts), None)
+            or next((p for p in down_after_start_all if _has_token_payload(p.payload)), None)
+        )
+        ttft_end_pkt = first_token_pkt or first_down_after_start
+        ttft_s = max((ttft_end_pkt.ts - req_start_ts), 0.0) if ttft_end_pkt else None
+
+    # Ensure TTFT >= TTFB (time)
     if ttft_s is not None and ttfb_s is not None and ttft_s < ttfb_s:
         ttft_s = ttfb_s
+        ttft_end_pkt = ttfb_end_pkt  # align end marker to TTFB end marker
 
-    # Latency: req_end -> last server app payload (response complete)
-    down_after_end = [p for p in down_app if p.ts >= req_end_ts]
-    last_down = down_after_end[-1] if down_after_end else (down_app[-1] if down_app else ordered[-1])
-    latency_s = max((last_down.ts - req_end_ts), 0.0) if last_down else None
+    # --- Latency: req_start -> last server app payload ---
+    down_after_start = [p for p in down_app if p.ts >= req_start_ts]
+    last_down = down_after_start[-1] if down_after_start else (down_app[-1] if down_app else ordered[-1])
+    latency_start_pkt = start_pkt
+    latency_end_pkt = last_down
+    latency_s = max((latency_end_pkt.ts - req_start_ts), 0.0) if latency_end_pkt else None
 
-    # Token stats (works for plaintext; HTTPS likely yields 0 due to encryption)
-    up_all = [p for p in ordered if p.src == client_ip]
-    input_tokens = sum(count_tokens(p.payload) for p in up_all)
-
-    down_all_after_end = [p for p in ordered if p.src == server_ip and p.ts >= req_end_ts]
-    output_tokens = sum(count_tokens(p.payload) for p in down_all_after_end)
+    # Token stats (plaintext works; HTTPS likely 0 due to encryption)
+    input_tokens = sum(count_tokens(p.payload) for p in ordered if p.src == client_ip)
+    output_tokens = sum(count_tokens(p.payload) for p in ordered if p.src == server_ip and p.ts >= req_start_ts)
 
     if latency_s is not None and ttft_s is not None and output_tokens > 0:
         tpot_ms = max((latency_s - ttft_s) * 1000, 0) / output_tokens
     else:
         tpot_ms = None
+
+    # ====== PRINT key packets as RELATIVE time (seconds, 6 decimals) ======
+    if DEBUG_PRINT:
+        base = base_ts  # relative-zero = request start
+
+        def _rel6(p: PacketMeta | None) -> str:
+            return f"{(p.ts - base):.6f}" if p is not None else "None"
+
+        print(
+            f"[ENTRY] flow={flow_key} "
+            f"req_start=+{_rel6(start_pkt)} req_end=+{_rel6(req_end_pkt)} | "
+            f"\nTTFB: +{_rel6(ttfb_start_pkt)}->+{_rel6(ttfb_end_pkt)} | "
+            f"\nTTFT: +{_rel6(ttft_start_pkt)}->+{_rel6(ttft_end_pkt)} | "
+            f"\nLAT: +{_rel6(latency_start_pkt)}->+{_rel6(latency_end_pkt)}"
+        )
 
     return {
         "category_major": major,
@@ -481,10 +490,10 @@ def _build_entry(
         "flow_key": flow_key,
 
         "start_time_real": fmt_real_time(req_start_ts),
-        "end_time_real": fmt_real_time(last_down.ts if last_down else req_start_ts),
+        "end_time_real": fmt_real_time(latency_end_pkt.ts if latency_end_pkt else req_start_ts),
         "start_time_rel_s": round(req_start_ts - base_ts, 1),
 
-        # Metrics start at "request finished uploading"
+        # metrics now start at req_start_ts
         "ttfb_ms": round(ttfb_s * 1000, 1) if ttfb_s is not None else None,
         "ttft_ms": round(ttft_s * 1000, 1) if ttft_s is not None else None,
         "latency_ms": round(latency_s * 1000, 1) if latency_s is not None else None,
@@ -493,7 +502,7 @@ def _build_entry(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
 
-        # Helpful debug fields
+        # debug fields
         "req_send_ms": round((req_end_ts - req_start_ts) * 1000, 1),
         "is_https": is_https,
         "stream_start_real": fmt_real_time(stream_start.ts) if stream_start else None,
