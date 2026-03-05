@@ -76,22 +76,23 @@ def init_db(db_path: Path = DB_PATH) -> None:
 
 
 def _is_valid_entry_for_store(entry: dict[str, Any]) -> bool:
+    """
+    Storage-level guard: keep only timing-valid rows.
+    Token checks are intentionally omitted to support HTTPS flows
+    where payload tokens are not observable at network layer.
+    """
     latency = entry.get("latency_ms")
     ttft = entry.get("ttft_ms")
-    input_tokens = entry.get("input_tokens") or 0
-    output_tokens = entry.get("output_tokens") or 0
     if latency is None or float(latency) <= 0:
         return False
     if ttft is None or float(ttft) <= 0:
         return False
-    if int(input_tokens) <= 0 or int(output_tokens) <= 0:
-        return False
     return True
 
 
-def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> None:
+def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> bool:
     if not _is_valid_entry_for_store(entry):
-        return
+        return False
     conn = get_conn(db_path)
     try:
         conn.execute(
@@ -119,6 +120,7 @@ def insert_entry(entry: dict[str, Any], db_path: Path = DB_PATH) -> None:
             ),
         )
         conn.commit()
+        return True
     finally:
         conn.close()
 

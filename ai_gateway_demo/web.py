@@ -75,10 +75,9 @@ async def api_upload(file: UploadFile = File(...)):
 
     configs = list_self_hosted()
     entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
-    for e in entries:
-        insert_entry(e)
+    inserted = sum(1 for e in entries if insert_entry(e))
 
-    return {"inserted": len(entries)}
+    return {"inserted": inserted, "detected": len(entries)}
 
 
 @app.post("/api/clear")
