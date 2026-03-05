@@ -102,7 +102,7 @@
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Latency(s)</th><th>大类</th><th>小类</th><th>流IP</th>
+            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Latency(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
             <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th>
           </tr>
         </thead>
@@ -123,7 +123,7 @@
     function flowIps(flowKey) {
       if (!flowKey || !flowKey.includes('-')) return '-';
       const [a, b] = flowKey.split('-');
-      return `${a.split(':')[0] || ''} ↔ ${b.split(':')[0] || ''}`;
+      return `${a} ↔ ${b}`;
     }
 
     function toServerTime(v) {

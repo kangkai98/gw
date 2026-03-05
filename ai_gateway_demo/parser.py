@@ -217,18 +217,46 @@ def _flow_ai_score(features: FlowFeatures, self_hosted_configs: list[dict]) -> f
 
 
 def pick_ai_flows(flows: dict[str, list[PacketMeta]], self_hosted_configs: list[dict]) -> list[FlowFeatures]:
+    """
+    Extract all plausible AI flows in one pcap, not just a single top flow.
+    Strategy:
+    1) keep all flows with explicit AI evidence (self-hosted IP / SNI host keyword / payload keyword)
+    2) plus dynamically selected high-score candidates
+    3) fallback to top1 only if no candidate survives
+    """
+    self_hosted_ips = {cfg["server_ip"] for cfg in self_hosted_configs}
+    all_keywords = [kw for kws in THIRD_PARTY_RULES.values() for kw in kws]
+
     ranked: list[tuple[FlowFeatures, float]] = []
     for flow_key, packets in flows.items():
         feats = _extract_flow_features(flow_key, packets)
-        ranked.append((feats, _flow_ai_score(feats, self_hosted_configs)))
+        score = _flow_ai_score(feats, self_hosted_configs)
+        ranked.append((feats, score))
 
     ranked.sort(key=lambda x: x[1], reverse=True)
     if not ranked:
         return []
 
     max_score = ranked[0][1]
-    dynamic_gate = max(14.0, max_score * 0.35)
-    selected = [feats for feats, score in ranked if score >= dynamic_gate]
+    dynamic_gate = max(12.0, max_score * 0.30)
+
+    selected: list[FlowFeatures] = []
+    seen: set[str] = set()
+
+    for feats, score in ranked:
+        text_payload = "\n".join(p.payload.lower() for p in feats.packets if p.payload)
+        sni_text = "\n".join((p.sni or "") for p in feats.packets if p.sni)
+
+        explicit_hit = (
+            feats.server_ip in self_hosted_ips
+            or any(k in sni_text for k in all_keywords)
+            or any(k in text_payload for k in all_keywords)
+        )
+        if explicit_hit or score >= dynamic_gate:
+            if feats.flow_key not in seen:
+                selected.append(feats)
+                seen.add(feats.flow_key)
+
     return selected if selected else [ranked[0][0]]
 
 
