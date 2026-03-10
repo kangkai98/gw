@@ -65,7 +65,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
             CREATE TABLE IF NOT EXISTS self_hosted_services (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                server_ip TEXT NOT NULL UNIQUE,
+                server_ip TEXT NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -76,17 +76,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
 
 
 def _is_valid_entry_for_store(entry: dict[str, Any]) -> bool:
-    """
-    Storage-level guard: keep only timing-valid rows.
-    Token checks are intentionally omitted to support HTTPS flows
-    where payload tokens are not observable at network layer.
-    """
-    latency = entry.get("latency_ms")
-    ttft = entry.get("ttft_ms")
-    if latency is None or float(latency) <= 0:
-        return False
-    if ttft is None or float(ttft) <= 0:
-        return False
+    # No DB-side filtering constraints; parser is responsible for filtering.
     return True
 
 
@@ -137,6 +127,7 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
 
 def _build_filters(
     category_major: str | None = None,
+    category_minor: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
     start_real: str | None = None,
@@ -147,6 +138,9 @@ def _build_filters(
     if category_major:
         clauses.append("category_major = ?")
         params.append(category_major)
+    if category_minor:
+        clauses.append("category_minor LIKE ?")
+        params.append(f"%{category_minor}%")
     if start_rel_s is not None:
         clauses.append("start_time_rel_s >= ?")
         params.append(start_rel_s)
@@ -164,6 +158,7 @@ def _build_filters(
 
 def list_entries(
     category_major: str | None = None,
+    category_minor: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
     start_real: str | None = None,
@@ -172,7 +167,7 @@ def list_entries(
 ) -> list[dict[str, Any]]:
     conn = get_conn(db_path)
     try:
-        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_real, end_real)
+        where_sql, params = _build_filters(category_major, category_minor, start_rel_s, end_rel_s, start_real, end_real)
         rows = conn.execute(f"SELECT * FROM entries{where_sql} ORDER BY id DESC", params).fetchall()
         return [dict(row) for row in rows]
     finally:
@@ -181,6 +176,7 @@ def list_entries(
 
 def get_stats(
     category_major: str | None = None,
+    category_minor: str | None = None,
     start_rel_s: float | None = None,
     end_rel_s: float | None = None,
     start_real: str | None = None,
@@ -189,7 +185,7 @@ def get_stats(
 ) -> dict[str, Any]:
     conn = get_conn(db_path)
     try:
-        where_sql, params = _build_filters(category_major, start_rel_s, end_rel_s, start_real, end_real)
+        where_sql, params = _build_filters(category_major, category_minor, start_rel_s, end_rel_s, start_real, end_real)
         totals = conn.execute(
             f"""
             SELECT
@@ -250,7 +246,7 @@ def add_self_hosted(name: str, server_ip: str, db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO self_hosted_services(name, server_ip) VALUES (?, ?)",
+            "INSERT INTO self_hosted_services(name, server_ip) VALUES (?, ?)",
             (name, server_ip),
         )
         conn.commit()

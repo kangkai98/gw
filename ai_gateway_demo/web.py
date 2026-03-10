@@ -33,6 +33,7 @@ templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 @app.get("/api/entries")
 def api_entries(
     category_major: str | None = Query(default=None),
+    category_minor: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
     start_real: str | None = Query(default=None),
@@ -41,6 +42,7 @@ def api_entries(
     return {
         "items": list_entries(
             category_major=category_major,
+            category_minor=category_minor,
             start_rel_s=start_rel_s,
             end_rel_s=end_rel_s,
             start_real=start_real,
@@ -52,6 +54,7 @@ def api_entries(
 @app.get("/api/stats")
 def api_stats(
     category_major: str | None = Query(default=None),
+    category_minor: str | None = Query(default=None),
     start_rel_s: float | None = Query(default=None),
     end_rel_s: float | None = Query(default=None),
     start_real: str | None = Query(default=None),
@@ -59,6 +62,7 @@ def api_stats(
 ):
     return get_stats(
         category_major=category_major,
+        category_minor=category_minor,
         start_rel_s=start_rel_s,
         end_rel_s=end_rel_s,
         start_real=start_real,

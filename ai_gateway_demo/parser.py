@@ -296,10 +296,13 @@ def _collect_sni(flow_packets: list[PacketMeta]) -> str | None:
     return None
 
 
-def classify_flow(flow_packets: list[PacketMeta], client_ip: str, server_ip: str, self_hosted_configs: list[dict]) -> tuple[str, str]:
+def classify_flow(flow_packets: list[PacketMeta], client_ip: str, server_ip: str, server_endpoint: str, self_hosted_configs: list[dict]) -> tuple[str, str]:
     for cfg in self_hosted_configs:
-        if cfg.get("server_ip") == server_ip:
-            return "自建AI", cfg.get("name") or server_ip
+        target = (cfg.get("server_ip") or "").strip()
+        if not target:
+            continue
+        if target == server_endpoint or target == server_ip:
+            return "自建AI", cfg.get("name") or target
 
     sni_text = "\n".join((pkt.sni or "") for pkt in flow_packets if pkt.sni)
     if _is_https_flow(flow_packets, client_ip):
@@ -791,6 +794,20 @@ def _is_valid_entry(entry: dict) -> bool:
     return True
 
 
+
+
+def _infer_server_endpoint(flow_packets: list[PacketMeta], client_ip: str, server_ip: str, go_tuple: tuple[str, int, str, int] | None) -> str:
+    if go_tuple:
+        return f"{go_tuple[2]}:{go_tuple[3]}"
+    c2s = next((p for p in flow_packets if p.src == client_ip and p.dst == server_ip), None)
+    if c2s is not None:
+        return f"{server_ip}:{c2s.dport}"
+    s2c = next((p for p in flow_packets if p.src == server_ip and p.dst == client_ip), None)
+    if s2c is not None:
+        return f"{server_ip}:{s2c.sport}"
+    return server_ip
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
     packets = extract_packets(pcap_path)
     if not packets:
@@ -810,7 +827,8 @@ def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> l
         segments = _merge_adjacent_segments_by_gap(segments, flow_packets, gap_sec=SEGMENT_MERGE_GAP_SEC)
 
         client_ip, server_ip = infer_direction(flow_packets, go_tuple=go_use)
-        major, minor = classify_flow(flow_packets, client_ip, server_ip, self_hosted_configs)
+        server_endpoint = _infer_server_endpoint(flow_packets, client_ip, server_ip, go_use)
+        major, minor = classify_flow(flow_packets, client_ip, server_ip, server_endpoint, self_hosted_configs)
         if major == "实验AI":
             minor = _collect_sni(flow_packets) or minor
 

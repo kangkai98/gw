@@ -87,7 +87,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
   margin-bottom: 12px;
 }
 
-.filter-form { display: grid; grid-template-columns: 210px 210px 160px auto auto; gap: 10px; align-items: center; }
+.filter-form { display: grid; grid-template-columns: 210px 210px 160px minmax(220px, 1fr) auto auto; gap: 10px; align-items: center; }
 .filter-btn { min-height: 44px; min-width: 116px; font-size: 14px; font-weight: 560; }
 .filter-form .ghost-btn { font-size: 14px; }
 
