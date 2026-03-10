@@ -777,7 +777,7 @@ def _build_entry(
         "flow_key": flow_key,
         "start_time_real": fmt_real_time(req_start_ts),
         "end_time_real": fmt_real_time(last_down.ts if last_down else req_start_ts),
-        "start_time_rel_s": round(req_start_ts - base_ts, 1),
+        "start_time_rel_s": round(req_start_ts - base_ts, 6),
         "ttfb_ms": round(ttfb_s * 1000, 1) if ttfb_s is not None else None,
         "ttft_ms": round(ttft_s * 1000, 1) if ttft_s is not None else None,
         "latency_ms": round(latency_s * 1000, 1) if latency_s is not None else None,
@@ -808,6 +808,26 @@ def _infer_server_endpoint(flow_packets: list[PacketMeta], client_ip: str, serve
     return server_ip
 
 
+def _infer_entry_flow_key(
+    entry_packets: list[PacketMeta],
+    client_ip: str,
+    server_ip: str,
+    go_tuple: tuple[str, int, str, int] | None,
+) -> str:
+    if go_tuple and go_tuple[0] == client_ip and go_tuple[2] == server_ip:
+        return f"{client_ip}:{go_tuple[1]}-{server_ip}:{go_tuple[3]}"
+
+    c2s = next((p for p in entry_packets if p.src == client_ip and p.dst == server_ip), None)
+    if c2s is not None:
+        return f"{client_ip}:{c2s.sport}-{server_ip}:{c2s.dport}"
+
+    s2c = next((p for p in entry_packets if p.src == server_ip and p.dst == client_ip), None)
+    if s2c is not None:
+        return f"{client_ip}:{s2c.dport}-{server_ip}:{s2c.sport}"
+
+    return f"{client_ip}:?-{server_ip}:?"
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
     packets = extract_packets(pcap_path)
     if not packets:
@@ -836,7 +856,13 @@ def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> l
             if not seg_pkts:
                 continue
             c_ip, s_ip = infer_direction(seg_pkts, go_tuple=go_use)
-            e = _build_entry(seg_pkts, c_ip, s_ip, flow_key, major, minor, base_ts)
+            entry_minor = minor
+            if major == "实验AI" and isinstance(entry_minor, str) and entry_minor.startswith("exp-"):
+                # Keep fallback minor IP aligned with the same direction inference
+                # used by this entry's metrics/flow context.
+                entry_minor = f"exp-{s_ip}"
+            entry_flow_key = _infer_entry_flow_key(seg_pkts, c_ip, s_ip, go_use)
+            e = _build_entry(seg_pkts, c_ip, s_ip, entry_flow_key, major, entry_minor, base_ts)
             if _is_valid_entry(e):
                 out_entries.append(e)
 
