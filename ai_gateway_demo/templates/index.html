@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Gateway Analytics</title>
+  <meta name="color-scheme" content="dark" />
+  <script>
+    tailwind = window.tailwind || {};
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'SF Pro Display', 'SF Pro Text', '-apple-system', 'BlinkMacSystemFont', 'PingFang SC', 'Segoe UI', 'sans-serif'],
+          },
+          colors: {
+            ink: '#060816',
+            panel: '#0D1324',
+            panel2: '#10192F',
+            line: 'rgba(255,255,255,0.08)',
+            glow: '#7C5CFF',
+            accent: '#5EEAD4',
+            azure: '#60A5FA',
+            rose: '#FB7185',
+            amber: '#FBBF24',
+          },
+          boxShadow: {
+            panel: '0 18px 80px rgba(4, 8, 20, 0.48), inset 0 1px 0 rgba(255,255,255,0.05)',
+            glow: '0 0 0 1px rgba(124,92,255,0.24), 0 18px 60px rgba(124,92,255,0.16)',
+          },
+          borderRadius: {
+            '4xl': '2rem',
+          },
+          backgroundImage: {
+            'panel-gradient': 'linear-gradient(180deg, rgba(16,25,47,0.96) 0%, rgba(9,14,28,0.98) 100%)',
+            'accent-mesh': 'radial-gradient(circle at 20% 20%, rgba(124,92,255,0.18), transparent 32%), radial-gradient(circle at 80% 0%, rgba(96,165,250,0.18), transparent 26%), radial-gradient(circle at 50% 100%, rgba(94,234,212,0.10), transparent 32%)',
+          },
+        },
+      },
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="dashboard-body bg-ink text-slate-100 antialiased">
+  <div id="app"></div>
+  <script type="module" src="/static/dashboard-app.js"></script>
+</body>
+</html>
