@@ -47,12 +47,12 @@
         <h2>自建 AI 配置</h2>
         <form id="cfgForm" class="inline-form">
           <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
-          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP:端口，如 192.168.101.1:443" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
           <button aria-label="保存配置" type="submit">保存</button>
           <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
         </form>
         <table id="cfgTable">
-          <thead><tr><th>ID</th><th>小类</th><th>IP:Port</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>小类</th><th>服务端IP</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -72,17 +72,14 @@
           <button type="button" data-range="clear" class="quick-btn">全部时间</button>
         </div>
         <form id="filterForm" class="filter-form">
-          <div class="range-box">
-            <label>
-              <span>开始时间</span>
-              <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
-            </label>
-            <span class="range-sep">至</span>
-            <label>
-              <span>结束时间</span>
-              <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
-            </label>
-          </div>
+          <label class="filter-item">
+            <span>开始时间</span>
+            <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
+          </label>
+          <label class="filter-item">
+            <span>结束时间</span>
+            <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
+          </label>
           <select id="majorFilter" aria-label="筛选AI大类">
             <option value="">全部大类</option>
             <option value="三方AI">三方AI</option>
@@ -106,6 +103,7 @@
       <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
     </section>
 
+    <div class="row-tag">流量规模</div>
     <section class="grid-three charts-gap">
       <section class="glass panel chart-panel">
         <div class="panel-head"><h2>流量规模｜AI 类别分布</h2><span class="subtle">按 AI 大类</span></div>
@@ -121,6 +119,7 @@
       </section>
     </section>
 
+    <div class="row-tag">时延表现</div>
     <section class="grid-three">
       <section class="glass panel chart-panel">
         <div class="panel-head"><h2>Duration｜趋势</h2><span class="subtle">按分钟平均</span></div>
@@ -136,6 +135,7 @@
       </section>
     </section>
 
+    <div class="row-tag">Token 与效率</div>
     <section class="grid-three">
       <section class="glass panel chart-panel">
         <div class="panel-head"><h2>Token｜输入输出趋势</h2><span class="subtle">按分钟聚合</span></div>
@@ -151,6 +151,7 @@
       </section>
     </section>
 
+    <div class="row-tag">分布与质量</div>
     <section class="grid-three">
       <section class="glass panel chart-panel">
         <div class="panel-head"><h2>热点｜AI 小类 Top 5</h2><span class="subtle">按请求量</span></div>

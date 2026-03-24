@@ -243,11 +243,14 @@ def list_self_hosted(db_path: Path = DB_PATH) -> list[dict[str, Any]]:
 
 
 def add_self_hosted(name: str, server_ip: str, db_path: Path = DB_PATH) -> None:
+    normalized = (server_ip or "").strip()
+    if ":" in normalized:
+        normalized = normalized.split(":", 1)[0].strip()
     conn = get_conn(db_path)
     try:
         conn.execute(
             "INSERT INTO self_hosted_services(name, server_ip) VALUES (?, ?)",
-            (name, server_ip),
+            (name, normalized),
         )
         conn.commit()
     finally:

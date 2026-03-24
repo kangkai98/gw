@@ -301,7 +301,8 @@ def classify_flow(flow_packets: list[PacketMeta], client_ip: str, server_ip: str
         target = (cfg.get("server_ip") or "").strip()
         if not target:
             continue
-        if target == server_endpoint or target == server_ip:
+        target_ip = target.split(":", 1)[0].strip()
+        if target_ip == server_ip:
             return "自建AI", cfg.get("name") or target
 
     sni_text = "\n".join((pkt.sni or "") for pkt in flow_packets if pkt.sni)

@@ -49,6 +49,17 @@ body {
 .stat small { color: #7b88a0; font-size: 12px; }
 
 .grid-three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.row-tag {
+  margin: 8px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #3e5786;
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(232,241,255,.85));
+  border: 1px solid rgba(84,116,168,.18);
+}
 .panel { padding: 20px; }
 .panel h2 { margin: 0; font-size: 20px; font-weight: 620; letter-spacing: -0.01em; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
@@ -121,23 +132,12 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 
 .filter-form {
   display: grid;
-  grid-template-columns: minmax(460px, 1.8fr) minmax(160px, .7fr) auto auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(160px, .8fr) auto auto;
   gap: 10px;
   align-items: center;
 }
-.range-box {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  gap: 10px;
-  align-items: end;
-  padding: 12px 14px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255,255,255,.88), rgba(244,248,255,.74));
-  border: 1px solid rgba(53,86,140,.12);
-}
-.range-box label { display: grid; gap: 6px; }
-.range-box span { font-size: 12px; color: #6f7d95; }
-.range-sep { align-self: center; font-size: 13px; color: #7b88a0; font-weight: 600; }
+.filter-item { display: grid; gap: 6px; }
+.filter-item span { font-size: 12px; color: #6f7d95; }
 .filter-btn { min-height: 44px; min-width: 116px; font-size: 14px; font-weight: 560; }
 
 .upload-shell { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
@@ -211,14 +211,11 @@ tr:hover td { background: rgba(255,255,255,.55); }
   .cards-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-three, .insight-grid { grid-template-columns: 1fr 1fr; }
   .filter-form { grid-template-columns: 1fr 1fr; }
-  .filter-form .range-box { grid-column: 1 / -1; }
 }
 
 @media (max-width: 980px) {
   .hero, .cards-8, .ops-grid, .grid-three, .filter-form, .inline-form, .insight-grid { grid-template-columns: 1fr; display: grid; }
   .hero { align-items: start; }
   .hero-note { align-items: flex-start; text-align: left; min-width: 0; }
-  .range-box { grid-template-columns: 1fr; }
-  .range-sep { justify-self: start; }
   .status-legend { justify-content: flex-start; }
 }
