@@ -13,7 +13,7 @@
     <header class="hero glass">
       <div>
         <h1>AI 网关观测台</h1>
-        <p>基于现有网络侧解析结果，统一展示流量规模、时延结构、Token 效率、热点模型与流级别质量。</p>
+        <p>基于现有网络侧解析结果，统一展示流量规模、Duration 结构、Token 效率、热点模型与流级别质量。</p>
       </div>
       <div class="hero-note">
         <span class="badge">Network-side AI Gateway</span>
@@ -26,10 +26,10 @@
       <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p><small>输入 token 总量</small></article>
       <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p><small>输出 token 总量</small></article>
       <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p><small>实时请求速率</small></article>
-      <article class="stat glass"><h3>平均 Latency(s)</h3><p id="avgLatency">0.0</p><small>端到端平均时延</small></article>
+      <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
       <article class="stat glass"><h3>平均 TTFT(ms)</h3><p id="avgTtft">0.0</p><small>首 token 平均耗时</small></article>
       <article class="stat glass"><h3>平均 TPOT</h3><p id="avgTpot">0.0</p><small>ms / token</small></article>
-      <article class="stat glass"><h3>热门小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
+      <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
     </section>
 
     <section class="grid-two">
@@ -73,19 +73,27 @@
       <div class="panel-head">
         <div>
           <h2>筛选条件</h2>
-          <p class="subtle">通过时间、大类、小类快速聚焦目标流量，再观察下方所有图表联动变化。</p>
+          <p class="subtle">通过时间范围与 AI 大类快速聚焦目标流量，再观察下方所有图表联动变化。</p>
         </div>
       </div>
       <form id="filterForm" class="filter-form">
-        <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
-        <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
+        <div class="range-box">
+          <label>
+            <span>开始时间</span>
+            <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
+          </label>
+          <span class="range-sep">至</span>
+          <label>
+            <span>结束时间</span>
+            <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
+          </label>
+        </div>
         <select id="majorFilter" aria-label="筛选AI大类">
           <option value="">全部大类</option>
           <option value="三方AI">三方AI</option>
           <option value="自建AI">自建AI</option>
           <option value="实验AI">实验AI</option>
         </select>
-        <input type="text" id="minorFilter" placeholder="按小类筛选（模糊匹配）" aria-label="筛选AI小类" />
         <button type="submit" aria-label="应用筛选" class="filter-btn">应用筛选</button>
         <button type="button" id="resetFilter" class="filter-btn ghost-btn" aria-label="重置筛选">重置</button>
       </form>
@@ -97,52 +105,52 @@
         <canvas id="majorPie"></canvas>
       </section>
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>时延均值对比 (ms)</h2><span class="subtle">TTFB / TTFT / Latency</span></div>
-        <canvas id="latencyBar"></canvas>
-      </section>
-      <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>P95 时延对比 (s)</h2><span class="subtle">按 AI 大类</span></div>
-        <canvas id="p95Bar"></canvas>
-      </section>
-    </section>
-
-    <section class="grid-three">
-      <section class="glass panel chart-panel">
         <div class="panel-head"><h2>Request 数时间变化图</h2><span class="subtle">按分钟聚合</span></div>
         <canvas id="requestLine"></canvas>
       </section>
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>输入输出 Token 总览</h2><span class="subtle">累计 token</span></div>
-        <canvas id="tokenBar"></canvas>
+        <div class="panel-head"><h2>Duration 曲线图</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="durationLine"></canvas>
       </section>
+    </section>
+
+    <section class="grid-three">
       <section class="glass panel chart-panel">
         <div class="panel-head"><h2>输入输出 Token 趋势</h2><span class="subtle">按分钟聚合</span></div>
         <canvas id="tokenTrend"></canvas>
       </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TPOT 对比图</h2><span class="subtle">按 AI 大类平均</span></div>
+        <canvas id="tpotBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TPOT 趋势图</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="tpotTrend"></canvas>
+      </section>
     </section>
 
     <section class="grid-three">
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>热门 AI 小类 Top 8</h2><span class="subtle">按请求量</span></div>
+        <div class="panel-head"><h2>热门 AI 小类 Top 5</h2><span class="subtle">按请求量</span></div>
         <canvas id="minorTopBar"></canvas>
       </section>
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>热点流 Top 8</h2><span class="subtle">按请求量 / 平均时延</span></div>
+        <div class="panel-head"><h2>热点流 Top 5</h2><span class="subtle">按请求量 / 平均 Duration</span></div>
         <canvas id="flowTopBar"></canvas>
       </section>
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>TTFT-TTFB 差值</h2><span class="subtle">首字节到首 token 开销</span></div>
-        <canvas id="gapBar"></canvas>
+        <div class="panel-head"><h2>请求状态概览</h2><span class="subtle">基于 TTFT + TPOT 的红黄绿健康分层</span></div>
+        <canvas id="statusBar"></canvas>
       </section>
     </section>
 
     <section class="grid-three">
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>Latency 分布直方图</h2><span class="subtle">按秒区间</span></div>
-        <canvas id="latencyHist"></canvas>
+        <div class="panel-head"><h2>Duration 分布直方图</h2><span class="subtle">按秒区间</span></div>
+        <canvas id="durationHist"></canvas>
       </section>
       <section class="glass panel chart-panel">
-        <div class="panel-head"><h2>输出 Token vs Latency</h2><span class="subtle">效率散点图</span></div>
+        <div class="panel-head"><h2>输出 Token vs Duration</h2><span class="subtle">效率散点图</span></div>
         <canvas id="scatterChart"></canvas>
       </section>
       <section class="glass panel chart-panel">
@@ -160,12 +168,19 @@
     </section>
 
     <section class="glass panel">
-      <h2>Request 列表</h2>
+      <div class="panel-head">
+        <h2>Request 列表</h2>
+        <div class="status-legend">
+          <span class="status-pill"><i class="light green"></i>健康</span>
+          <span class="status-pill"><i class="light yellow"></i>关注</span>
+          <span class="status-pill"><i class="light red"></i>告警</span>
+        </div>
+      </div>
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Latency(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
-            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th>
+            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -202,12 +217,10 @@
       const startReal = toServerTime(document.getElementById('startReal').value);
       const endReal = toServerTime(document.getElementById('endReal').value);
       const major = document.getElementById('majorFilter').value;
-      const minor = document.getElementById('minorFilter').value.trim();
       const q = new URLSearchParams();
       if (startReal) q.set('start_real', startReal);
       if (endReal) q.set('end_real', endReal);
       if (major) q.set('category_major', major);
-      if (minor) q.set('category_minor', minor);
       const qs = q.toString();
       return qs ? `?${qs}` : '';
     }
@@ -234,6 +247,14 @@
       return map;
     }
 
+    function classifyStatus(entry) {
+      const ttft = Number(entry.ttft_ms || 0);
+      const tpot = Number(entry.tpot_ms_per_token || 0);
+      if (ttft >= 3500 || tpot >= 180) return { label: '告警', cls: 'red' };
+      if (ttft >= 1800 || tpot >= 90) return { label: '关注', cls: 'yellow' };
+      return { label: '健康', cls: 'green' };
+    }
+
     function chartOptions(extra = {}) {
       return {
         responsive: true,
@@ -252,29 +273,24 @@
       };
     }
 
-    function buildDerived(entries, stats) {
+    function buildDerived(entries) {
       const byMajor = groupBy(entries, e => e.category_major || '未知');
       const byMinor = groupBy(entries, e => e.category_minor || '未知');
       const byFlow = groupBy(entries, e => e.flow_key || '未知');
       const byMinute = groupBy(entries, e => (e.start_time_real || '').slice(0, 16));
       const byHour = groupBy(entries, e => (e.start_time_real || '').slice(11, 13));
 
-      const p95ByMajor = Array.from(byMajor.entries()).map(([label, rows]) => ({
-        label,
-        value: percentile(rows.map(r => Number(r.latency_ms || 0) / 1000), 95),
-      }));
-
       const topMinor = Array.from(byMinor.entries())
-        .map(([label, rows]) => ({ label, count: rows.length, avgLatency: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
+        .map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
         .sort((a, b) => b.count - a.count)
-        .slice(0, 8);
+        .slice(0, 5);
 
       const topFlows = Array.from(byFlow.entries())
-        .map(([label, rows]) => ({ label, count: rows.length, avgLatency: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
+        .map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
         .sort((a, b) => b.count - a.count)
-        .slice(0, 8);
+        .slice(0, 5);
 
-      const tokenTrend = Array.from(byMinute.entries())
+      const minuteSeries = Array.from(byMinute.entries())
         .filter(([k]) => !!k)
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([label, rows]) => ({
@@ -282,6 +298,8 @@
           input: rows.reduce((s, r) => s + Number(r.input_tokens || 0), 0),
           output: rows.reduce((s, r) => s + Number(r.output_tokens || 0), 0),
           count: rows.length,
+          avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)),
+          avgTpot: avg(rows.map(r => Number(r.tpot_ms_per_token || 0)).filter(v => v > 0)),
         }));
 
       const hourTrend = Array.from({ length: 24 }, (_, h) => {
@@ -290,23 +308,23 @@
         return { label: `${hh}:00`, count: rows.length };
       });
 
-      const latencyBins = [0, 0.5, 1, 2, 3, 5, 10, Infinity];
-      const latencyLabels = ['0-0.5s', '0.5-1s', '1-2s', '2-3s', '3-5s', '5-10s', '10s+'];
-      const latencyCounts = new Array(latencyLabels.length).fill(0);
+      const durationBins = [0, 0.5, 1, 2, 3, 5, 10, Infinity];
+      const durationLabels = ['0-0.5s', '0.5-1s', '1-2s', '2-3s', '3-5s', '5-10s', '10s+'];
+      const durationCounts = new Array(durationLabels.length).fill(0);
       entries.forEach(e => {
         const sec = Number(e.latency_ms || 0) / 1000;
-        for (let i = 0; i < latencyBins.length - 1; i++) {
-          if (sec >= latencyBins[i] && sec < latencyBins[i + 1]) {
-            latencyCounts[i] += 1;
+        for (let i = 0; i < durationBins.length - 1; i++) {
+          if (sec >= durationBins[i] && sec < durationBins[i + 1]) {
+            durationCounts[i] += 1;
             break;
           }
         }
       });
 
-      const gapByMajor = Array.from(byMajor.entries()).map(([label, rows]) => ({
-        label,
-        value: avg(rows.map(r => Math.max(0, Number(r.ttft_ms || 0) - Number(r.ttfb_ms || 0)))),
-      }));
+      const statusCounts = { green: 0, yellow: 0, red: 0 };
+      entries.forEach((entry) => {
+        statusCounts[classifyStatus(entry).cls] += 1;
+      });
 
       const scatterDatasets = Array.from(byMajor.entries()).map(([label, rows], idx) => ({
         label,
@@ -316,61 +334,61 @@
         backgroundColor: palette[idx % palette.length],
       }));
 
-      const hottestMinor = topMinor[0]?.label || '-';
-      const avgLatency = avg(entries.map(e => Number(e.latency_ms || 0) / 1000));
+      const avgDuration = avg(entries.map(e => Number(e.latency_ms || 0) / 1000));
       const avgTtft = avg(entries.map(e => Number(e.ttft_ms || 0)));
       const avgTpot = avg(entries.map(e => Number(e.tpot_ms_per_token || 0)).filter(v => v > 0));
+      const hottestMinor = topMinor[0]?.label || '-';
 
       const insights = [
         {
-          title: '尾延迟风险',
-          value: `${num2(Math.max(...p95ByMajor.map(i => i.value), 0))}s`,
-          desc: '当前筛选范围内最大的 P95 latency，用于快速判断长尾风险。',
+          title: 'Duration 长尾',
+          value: `${num2(percentile(entries.map(e => Number(e.latency_ms || 0) / 1000), 95))}s`,
+          desc: '当前筛选范围内最大的 P95 duration，用于快速判断长尾风险。',
         },
         {
           title: '最热小类',
           value: hottestMinor,
-          desc: topMinor[0] ? `请求数 ${topMinor[0].count}，平均时延 ${num2(topMinor[0].avgLatency)}s。` : '暂无数据。',
-        },
-        {
-          title: '流式生成开销',
-          value: `${num1(Math.max(...gapByMajor.map(i => i.value), 0))}ms`,
-          desc: 'TTFT 与 TTFB 的差值越大，说明首字节到首 token 的生成阶段越长。',
+          desc: topMinor[0] ? `请求数 ${topMinor[0].count}，平均 Duration ${num2(topMinor[0].avgDuration)}s。` : '暂无数据。',
         },
         {
           title: '热点流',
           value: topFlows[0] ? flowIps(topFlows[0].label) : '-',
-          desc: topFlows[0] ? `请求数 ${topFlows[0].count}，平均时延 ${num2(topFlows[0].avgLatency)}s。` : '暂无数据。',
+          desc: topFlows[0] ? `请求数 ${topFlows[0].count}，平均 Duration ${num2(topFlows[0].avgDuration)}s。` : '暂无数据。',
+        },
+        {
+          title: '状态概览',
+          value: `绿 ${statusCounts.green} / 黄 ${statusCounts.yellow} / 红 ${statusCounts.red}`,
+          desc: '基于 TTFT + TPOT 的健康分层结果，可用于快速识别异常请求。',
         },
       ];
 
       return {
-        p95ByMajor,
         topMinor,
         topFlows,
-        tokenTrend,
+        minuteSeries,
         hourTrend,
-        latencyLabels,
-        latencyCounts,
-        gapByMajor,
+        durationLabels,
+        durationCounts,
+        statusCounts,
         scatterDatasets,
         hottestMinor,
-        avgLatency,
+        avgDuration,
         avgTtft,
         avgTpot,
         insights,
+        majorTpot: Array.from(byMajor.entries()).map(([label, rows]) => ({
+          label,
+          value: avg(rows.map(r => Number(r.tpot_ms_per_token || 0)).filter(v => v > 0)),
+        })),
       };
     }
 
     function drawCharts(rows, stats, entries) {
       destroyAllCharts();
-
       const labels = rows.map(r => r.category_major);
       const counts = rows.map(r => r.total_entries);
-      const ttfb = rows.map(r => r.avg_ttfb_ms || 0);
-      const ttft = rows.map(r => r.avg_ttft_ms || 0);
-      const latency = rows.map(r => r.avg_latency_ms || 0);
-      const derived = buildDerived(entries, stats);
+      const derived = buildDerived(entries);
+      const minuteLabels = derived.minuteSeries.map(i => i.label);
 
       charts.majorPie = new Chart(document.getElementById('majorPie'), {
         type: 'doughnut',
@@ -378,36 +396,13 @@
         options: chartOptions({ cutout: '62%', scales: {} })
       });
 
-      charts.latencyBar = new Chart(document.getElementById('latencyBar'), {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            { label: 'TTFB', data: ttfb, backgroundColor: '#96beff' },
-            { label: 'TTFT', data: ttft, backgroundColor: '#86dfca' },
-            { label: 'Latency', data: latency, backgroundColor: '#ffd493' },
-          ]
-        },
-        options: chartOptions()
-      });
-
-      charts.p95Bar = new Chart(document.getElementById('p95Bar'), {
-        type: 'bar',
-        data: {
-          labels: derived.p95ByMajor.map(i => i.label),
-          datasets: [{ label: 'P95 Latency(s)', data: derived.p95ByMajor.map(i => i.value), backgroundColor: '#7aa2ff', borderRadius: 10 }]
-        },
-        options: chartOptions()
-      });
-
-      const minuteLabels = derived.tokenTrend.map(i => i.label);
       charts.requestLine = new Chart(document.getElementById('requestLine'), {
         type: 'line',
         data: {
           labels: minuteLabels,
           datasets: [{
             label: 'Request数',
-            data: derived.tokenTrend.map(i => i.count),
+            data: derived.minuteSeries.map(i => i.count),
             borderColor: '#7aa2ff',
             backgroundColor: 'rgba(122,162,255,.16)',
             fill: true,
@@ -418,18 +413,21 @@
         options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0, color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } } })
       });
 
-      charts.tokenBar = new Chart(document.getElementById('tokenBar'), {
-        type: 'bar',
+      charts.durationLine = new Chart(document.getElementById('durationLine'), {
+        type: 'line',
         data: {
-          labels: ['输入Token', '输出Token'],
+          labels: minuteLabels,
           datasets: [{
-            data: [stats.total_input_tokens || 0, stats.total_output_tokens || 0],
-            backgroundColor: ['#7aa2ff', '#67d4b6'],
-            borderRadius: 10,
-            maxBarThickness: 62,
+            label: '平均 Duration(s)',
+            data: derived.minuteSeries.map(i => i.avgDuration),
+            borderColor: '#ffc56e',
+            backgroundColor: 'rgba(255,197,110,.18)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
           }]
         },
-        options: chartOptions({ plugins: { legend: { display: false } } })
+        options: chartOptions()
       });
 
       charts.tokenTrend = new Chart(document.getElementById('tokenTrend'), {
@@ -437,9 +435,35 @@
         data: {
           labels: minuteLabels,
           datasets: [
-            { label: '输入Token', data: derived.tokenTrend.map(i => i.input), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.14)', fill: false, tension: 0.25 },
-            { label: '输出Token', data: derived.tokenTrend.map(i => i.output), borderColor: '#67d4b6', backgroundColor: 'rgba(103,212,182,.14)', fill: false, tension: 0.25 },
+            { label: '输入Token', data: derived.minuteSeries.map(i => i.input), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.14)', fill: false, tension: 0.25 },
+            { label: '输出Token', data: derived.minuteSeries.map(i => i.output), borderColor: '#67d4b6', backgroundColor: 'rgba(103,212,182,.14)', fill: false, tension: 0.25 },
           ]
+        },
+        options: chartOptions()
+      });
+
+      charts.tpotBar = new Chart(document.getElementById('tpotBar'), {
+        type: 'bar',
+        data: {
+          labels: derived.majorTpot.map(i => i.label),
+          datasets: [{ label: '平均 TPOT(ms/token)', data: derived.majorTpot.map(i => i.value), backgroundColor: '#86dfca', borderRadius: 10 }]
+        },
+        options: chartOptions()
+      });
+
+      charts.tpotTrend = new Chart(document.getElementById('tpotTrend'), {
+        type: 'line',
+        data: {
+          labels: minuteLabels,
+          datasets: [{
+            label: '平均 TPOT(ms/token)',
+            data: derived.minuteSeries.map(i => i.avgTpot),
+            borderColor: '#d7b8ff',
+            backgroundColor: 'rgba(215,184,255,.20)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
+          }]
         },
         options: chartOptions()
       });
@@ -459,26 +483,31 @@
           labels: derived.topFlows.map(i => flowIps(i.label)),
           datasets: [
             { label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 },
-            { label: '平均时延(s)', data: derived.topFlows.map(i => i.avgLatency), backgroundColor: '#ffc56e', borderRadius: 10 },
+            { label: '平均 Duration(s)', data: derived.topFlows.map(i => i.avgDuration), backgroundColor: '#ffc56e', borderRadius: 10 },
           ]
         },
         options: chartOptions({ indexAxis: 'y' })
       });
 
-      charts.gapBar = new Chart(document.getElementById('gapBar'), {
+      charts.statusBar = new Chart(document.getElementById('statusBar'), {
         type: 'bar',
         data: {
-          labels: derived.gapByMajor.map(i => i.label),
-          datasets: [{ label: 'TTFT - TTFB (ms)', data: derived.gapByMajor.map(i => i.value), backgroundColor: '#ff8fa6', borderRadius: 10 }]
+          labels: ['健康', '关注', '告警'],
+          datasets: [{
+            label: '请求数',
+            data: [derived.statusCounts.green, derived.statusCounts.yellow, derived.statusCounts.red],
+            backgroundColor: ['#4dbb7a', '#f0c24b', '#e45d6e'],
+            borderRadius: 10,
+          }]
         },
-        options: chartOptions()
+        options: chartOptions({ plugins: { legend: { display: false } } })
       });
 
-      charts.latencyHist = new Chart(document.getElementById('latencyHist'), {
+      charts.durationHist = new Chart(document.getElementById('durationHist'), {
         type: 'bar',
         data: {
-          labels: derived.latencyLabels,
-          datasets: [{ label: '请求数', data: derived.latencyCounts, backgroundColor: '#7aa2ff', borderRadius: 10 }]
+          labels: derived.durationLabels,
+          datasets: [{ label: '请求数', data: derived.durationCounts, backgroundColor: '#7aa2ff', borderRadius: 10 }]
         },
         options: chartOptions()
       });
@@ -490,7 +519,7 @@
           plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } } },
           scales: {
             x: { title: { display: true, text: '输出 Token', color: '#55647f' }, ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } },
-            y: { title: { display: true, text: 'Latency(s)', color: '#55647f' }, ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' }, beginAtZero: true },
+            y: { title: { display: true, text: 'Duration(s)', color: '#55647f' }, ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' }, beginAtZero: true },
           }
         })
       });
@@ -504,7 +533,7 @@
         options: chartOptions()
       });
 
-      document.getElementById('avgLatency').textContent = num2(derived.avgLatency);
+      document.getElementById('avgDuration').textContent = num2(derived.avgDuration);
       document.getElementById('avgTtft').textContent = num1(derived.avgTtft);
       document.getElementById('avgTpot').textContent = num1(derived.avgTpot);
       document.getElementById('topMinor').textContent = derived.hottestMinor;
@@ -531,14 +560,18 @@
       document.getElementById('totalOutput').textContent = compact(stats.total_output_tokens);
       document.getElementById('rps').textContent = num1(stats.rps);
 
-      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => `
-        <tr>
-          <td>${e.id}</td><td>${e.start_time_real}</td><td>${num1(e.start_time_rel_s)}</td><td>${num3((e.latency_ms || 0) / 1000)}</td>
-          <td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td>
-          <td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td>
-          <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
-        </tr>
-      `).join('');
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
+        const statusInfo = classifyStatus(e);
+        return `
+          <tr>
+            <td>${e.id}</td><td>${e.start_time_real}</td><td>${num1(e.start_time_rel_s)}</td><td>${num3((e.latency_ms || 0) / 1000)}</td>
+            <td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td>
+            <td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td>
+            <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+            <td><span class="status-pill"><i class="light ${statusInfo.cls}"></i>${statusInfo.label}</span></td>
+          </tr>
+        `;
+      }).join('');
 
       document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
         <tr>
@@ -642,7 +675,6 @@
       document.getElementById('startReal').value = '';
       document.getElementById('endReal').value = '';
       document.getElementById('majorFilter').value = '';
-      document.getElementById('minorFilter').value = '';
       await refreshAll();
     };
 
