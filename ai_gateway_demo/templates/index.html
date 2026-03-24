@@ -16,6 +16,7 @@
       <a href="/" class="{% if page == 'home' %}active{% endif %}">主页</a>
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">配置</a>
       <a href="/records" class="{% if page == 'records' %}active{% endif %}">详细记录</a>
+      <a href="/probe" class="{% if page == 'probe' %}active{% endif %}">拨测</a>
     </nav>
   </aside>
 
@@ -27,7 +28,7 @@
       </div>
       <div class="hero-note">
         <span class="badge">Network-side AI Gateway</span>
-        <span class="hero-tip">页面分为主页、配置、详细记录三部分，便于按角色查看。</span>
+        <span class="hero-tip">页面分为主页、配置、详细记录、拨测四部分，便于按角色查看。</span>
       </div>
     </header>
 
@@ -131,23 +132,9 @@
 
     {% if page == 'config' %}
     <section class="config-grid">
-      <section class="glass panel">
-        <h2>自建AI配置</h2>
-        <form id="cfgForm" class="inline-config-form">
-          <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
-          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
-          <button aria-label="保存配置" type="submit">保存</button>
-          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
-        </form>
-        <table id="cfgTable">
-          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </section>
-
       <section class="glass panel" id="upload">
         <h2>上传抓包文件</h2>
-        <form id="uploadForm">
+        <form id="uploadForm" class="panel-content-gap">
           <label class="upload-shell" aria-label="PCAP 文件">
             <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
             <span class="file-btn">选择文件</span>
@@ -164,6 +151,20 @@
             <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
           </div>
         </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>自建AI配置</h2>
+        <form id="cfgForm" class="inline-config-form panel-content-gap">
+          <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <button aria-label="保存配置" type="submit">保存</button>
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+        </form>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </section>
 
       <section class="glass panel">
@@ -187,6 +188,45 @@
         </form>
         <p id="mcpStatus" class="subtle"></p>
       </section>
+    </section>
+    {% endif %}
+
+    {% if page == 'probe' %}
+    <section class="glass panel">
+      <h2>拨测 - curl 报文</h2>
+      <p class="subtle">用于配置并发送 curl 请求到大模型服务，查看返回结果。</p>
+      <form id="probeForm" class="probe-form panel-content-gap">
+        <label class="filter-item">
+          <span>目标 URL</span>
+          <input name="target" placeholder="https://api.example.com/v1/chat/completions" required />
+        </label>
+        <label class="filter-item">
+          <span>HTTP 方法</span>
+          <select name="method">
+            <option value="POST">POST</option>
+            <option value="GET">GET</option>
+            <option value="PUT">PUT</option>
+            <option value="PATCH">PATCH</option>
+            <option value="DELETE">DELETE</option>
+          </select>
+        </label>
+        <label class="filter-item probe-full">
+          <span>请求头（每行一个，格式：Key: Value）</span>
+          <textarea name="headers" rows="5" placeholder="Authorization: Bearer sk-xxx&#10;Content-Type: application/json"></textarea>
+        </label>
+        <label class="filter-item probe-full">
+          <span>请求体</span>
+          <textarea name="body" rows="8" placeholder='{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hello"}]}'></textarea>
+        </label>
+        <div class="actions probe-full">
+          <button type="submit">发送拨测</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="glass panel">
+      <h2>拨测结果</h2>
+      <div id="probeResult" class="probe-result">暂未发送请求。</div>
     </section>
     {% endif %}
 
@@ -266,7 +306,8 @@
     function chartOptions(extra = {}) {
       return {
         responsive: true,
-        maintainAspectRatio: false,
+        maintainAspectRatio: true,
+        aspectRatio: 1.7,
         plugins: {
           legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } },
           tooltip: { backgroundColor: 'rgba(27,40,67,.92)', titleColor: '#fff', bodyColor: '#e8f0ff', padding: 12, cornerRadius: 12 },
@@ -320,8 +361,48 @@
       if (has('majorPie')) charts.majorPie = new Chart($('majorPie'), { type: 'doughnut', data: { labels, datasets: [{ data: counts, backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }] }, options: chartOptions({ cutout: '62%', aspectRatio: 1, scales: {} }) });
       if (has('requestLine')) charts.requestLine = new Chart($('requestLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: 'Request数', data: derived.minuteSeries.map(i => i.count), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.16)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0, color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } } }) });
       if (has('statusBar')) charts.statusBar = new Chart($('statusBar'), { type: 'bar', data: { labels: ['健康', '关注', '告警'], datasets: [{ label: '请求数', data: [derived.statusCounts.green, derived.statusCounts.yellow, derived.statusCounts.red], backgroundColor: ['#4dbb7a', '#f0c24b', '#e45d6e'], borderRadius: 10 }] }, options: chartOptions({ plugins: { legend: { display: false } } }) });
-      if (has('minorTopBar')) charts.minorTopBar = new Chart($('minorTopBar'), { type: 'bar', data: { labels: derived.topMinor.map(i => shortLabel(i.label, 10)), datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
-      if (has('flowTopBar')) charts.flowTopBar = new Chart($('flowTopBar'), { type: 'bar', data: { labels: derived.topFlows.map(i => shortLabel(flowIps(i.label), 14)), datasets: [{ label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
+      if (has('minorTopBar')) {
+        const fullMinorLabels = derived.topMinor.map(i => i.label);
+        charts.minorTopBar = new Chart($('minorTopBar'), {
+          type: 'bar',
+          data: {
+            labels: fullMinorLabels.map(i => shortLabel(i, 9)),
+            datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }],
+          },
+          options: chartOptions({
+            indexAxis: 'y',
+            scales: { x: { beginAtZero: true }, y: { ticks: { color: '#55647f', font: { size: 11 } }, grid: { color: 'rgba(86,112,159,.10)' } } },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: (items) => fullMinorLabels[items?.[0]?.dataIndex ?? 0] || '',
+                },
+              },
+            },
+          }),
+        });
+      }
+      if (has('flowTopBar')) {
+        const fullFlowLabels = derived.topFlows.map(i => flowIps(i.label));
+        charts.flowTopBar = new Chart($('flowTopBar'), {
+          type: 'bar',
+          data: {
+            labels: fullFlowLabels.map(i => shortLabel(i, 12)),
+            datasets: [{ label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 }],
+          },
+          options: chartOptions({
+            indexAxis: 'y',
+            scales: { x: { beginAtZero: true }, y: { ticks: { color: '#55647f', font: { size: 11 } }, grid: { color: 'rgba(86,112,159,.10)' } } },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: (items) => fullFlowLabels[items?.[0]?.dataIndex ?? 0] || '',
+                },
+              },
+            },
+          }),
+        });
+      }
       if (has('hourBar')) charts.hourBar = new Chart($('hourBar'), { type: 'bar', data: { labels: derived.hourTrend.map(i => i.label), datasets: [{ label: '请求数', data: derived.hourTrend.map(i => i.count), backgroundColor: '#67d4b6', borderRadius: 8 }] }, options: chartOptions() });
       if (has('durationLine')) charts.durationLine = new Chart($('durationLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 Duration(s)', data: derived.minuteSeries.map(i => i.avgDuration), borderColor: '#ffc56e', backgroundColor: 'rgba(255,197,110,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
       if (has('ttftTrend')) charts.ttftTrend = new Chart($('ttftTrend'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 TTFT(ms)', data: derived.minuteSeries.map(i => i.avgTtft), borderColor: '#89d0ff', backgroundColor: 'rgba(137,208,255,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
@@ -419,7 +500,18 @@
       $('status').textContent = result.ok ? 'MCP 配置确认成功。' : 'MCP 配置确认失败。';
     };
 
-    refreshAll();
+    if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
+      const data = await resp.json();
+      $('probeResult').textContent = `状态: ${data.ok ? '成功' : '失败'} (code=${data.code ?? '-'})\n${data.message || ''}\n\nSTDOUT:\n${data.stdout || '-'}\n\nSTDERR:\n${data.stderr || '-'}`;
+      $('status').textContent = data.ok ? '拨测完成。' : '拨测失败，请检查参数。';
+    };
+
+    if (document.body.dataset.page !== 'probe') {
+      refreshAll();
+    }
   </script>
 </body>
 </html>
