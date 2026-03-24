@@ -49,7 +49,7 @@ body {
 
 .cards { display: grid; gap: 16px; margin-bottom: 22px; }
 .cards-8 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.centered-cards { max-width: 1360px; margin-left: auto; margin-right: auto; }
+.centered-cards { width: 100%; margin-left: 0; margin-right: 0; }
 .stat { padding: 19px 22px; min-height: 124px; display: flex; flex-direction: column; justify-content: center; }
 .stat h3 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 520; }
 .stat p { margin: 10px 0 4px; font-size: 34px; font-weight: 650; letter-spacing: -0.02em; }
@@ -59,15 +59,14 @@ body {
 .panel h2 { margin: 0; font-size: 20px; font-weight: 620; letter-spacing: -0.01em; }
 .panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .subtle { color: #6f7d95; font-size: 12px; line-height: 1.6; }
-.filter-panel { padding-top: 14px; padding-bottom: 12px; }
-.quick-range { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.filter-panel { padding-top: 12px; padding-bottom: 10px; }
 .quick-btn { border-radius: 999px; padding: 7px 12px; font-size: 12px; background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(238,245,255,.92)); }
 
 .grid-three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
 .row-tag { margin: 6px 2px 8px; font-size: 15px; font-weight: 650; color: #3e5786; }
-.chart-panel { min-height: 320px; }
-.chart-panel canvas { width: 100% !important; height: auto !important; aspect-ratio: 1.7; }
-.chart-panel-pie canvas { aspect-ratio: 1.25; }
+.chart-panel { min-height: 360px; }
+.chart-panel canvas { width: 100% !important; height: 285px !important; }
+.chart-panel-pie canvas { height: 300px !important; max-height: 300px !important; }
 
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .panel-content-gap { margin-top: 14px; }
@@ -127,7 +126,7 @@ th { color: #3f4f69; background: rgba(255,255,255,.56); position: sticky; top: 0
 tr:hover td { background: rgba(255,255,255,.55); }
 #entryTable td:last-child, #entryTable th:last-child { text-align: center; width: 70px; }
 .status-legend { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.12); color: #42526c; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 999px; background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.12); color: #42526c; font-size: 11px; }
 .light { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 3px rgba(255,255,255,.52); }
 .light.green { background: #4dbb7a; }
 .light.yellow { background: #f0c24b; }

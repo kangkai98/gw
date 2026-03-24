@@ -37,15 +37,7 @@
       <div class="panel-head">
         <div>
           <h2>筛选条件</h2>
-          <p class="subtle">先选快捷时间，再精确到起止时间和 AI 大类。</p>
         </div>
-      </div>
-      <div class="quick-range" id="quickRange">
-        <button type="button" data-range="15m" class="quick-btn">近 15 分钟</button>
-        <button type="button" data-range="1h" class="quick-btn">近 1 小时</button>
-        <button type="button" data-range="6h" class="quick-btn">近 6 小时</button>
-        <button type="button" data-range="24h" class="quick-btn">近 24 小时</button>
-        <button type="button" data-range="clear" class="quick-btn">全部时间</button>
       </div>
       <form id="filterForm" class="filter-form">
         <label class="filter-item">
@@ -221,12 +213,8 @@
         <div class="actions probe-full">
           <button type="submit">发送拨测</button>
         </div>
+        <div id="probeResult" class="probe-result probe-full">暂未发送请求。</div>
       </form>
-    </section>
-
-    <section class="glass panel">
-      <h2>拨测结果</h2>
-      <div id="probeResult" class="probe-result">暂未发送请求。</div>
     </section>
     {% endif %}
 
@@ -306,8 +294,7 @@
     function chartOptions(extra = {}) {
       return {
         responsive: true,
-        maintainAspectRatio: true,
-        aspectRatio: 1.7,
+        maintainAspectRatio: false,
         plugins: {
           legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } },
           tooltip: { backgroundColor: 'rgba(27,40,67,.92)', titleColor: '#fff', bodyColor: '#e8f0ff', padding: 12, cornerRadius: 12 },
@@ -476,7 +463,6 @@
     }
 
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
-    document.querySelectorAll('#quickRange [data-range]').forEach((btn) => { btn.onclick = async () => { applyQuickRange(btn.dataset.range); await refreshAll(); }; });
     if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
     if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); await fetch('/api/self-hosted', { method: 'POST', body: fd }); e.target.reset(); $('status').textContent = '自建配置已保存。'; await refreshAll(); };
