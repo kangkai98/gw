@@ -115,4 +115,29 @@ def api_self_hosted_clear():
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request, "page": "stats"})
+
+
+@app.get("/hotspots", response_class=HTMLResponse)
+def hotspots_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "hotspots"})
+
+
+@app.get("/latency", response_class=HTMLResponse)
+def latency_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "latency"})
+
+
+@app.get("/upload", response_class=HTMLResponse)
+def upload_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "upload"})
+
+
+@app.get("/config", response_class=HTMLResponse)
+def config_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "config"})
+
+
+@app.get("/logs", response_class=HTMLResponse)
+def logs_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "logs"})
