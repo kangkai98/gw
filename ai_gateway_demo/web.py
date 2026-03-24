@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -130,6 +131,11 @@ def records_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "records"})
 
 
+@app.get("/probe", response_class=HTMLResponse)
+def probe_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "probe"})
+
+
 @app.post("/api/connectivity-check")
 def api_connectivity_check(target: str = Form(...), timeout_sec: float = Form(default=2.0)):
     raw = (target or "").strip()
@@ -155,3 +161,54 @@ def api_connectivity_check(target: str = Form(...), timeout_sec: float = Form(de
             return {"ok": True, "message": f"连通成功: {host}:{port}"}
     except Exception as exc:  # pragma: no cover - network dependent
         return {"ok": False, "message": f"连通失败: {host}:{port} ({exc})"}
+
+
+@app.post("/api/probe-curl")
+def api_probe_curl(
+    target: str = Form(...),
+    method: str = Form(default="POST"),
+    headers: str = Form(default=""),
+    body: str = Form(default=""),
+    timeout_sec: float = Form(default=20.0),
+):
+    url = (target or "").strip()
+    if not url:
+        return {"ok": False, "message": "目标 URL 不能为空"}
+
+    safe_method = (method or "POST").strip().upper()
+    if safe_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        return {"ok": False, "message": f"不支持的方法: {safe_method}"}
+
+    cmd = [
+        "curl",
+        "-sS",
+        "-X",
+        safe_method,
+        "--max-time",
+        str(max(1.0, min(float(timeout_sec), 90.0))),
+        url,
+    ]
+
+    for line in (headers or "").splitlines():
+        part = line.strip()
+        if not part:
+            continue
+        cmd.extend(["-H", part])
+
+    if body.strip():
+        cmd.extend(["--data", body])
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        return {"ok": False, "message": f"curl 执行失败: {exc}"}
+
+    ok = proc.returncode == 0
+    return {
+        "ok": ok,
+        "code": proc.returncode,
+        "stdout": (proc.stdout or "")[:20000],
+        "stderr": (proc.stderr or "")[:4000],
+        "message": "请求完成" if ok else "请求失败",
+        "command": " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""),
+    }
