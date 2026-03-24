@@ -32,27 +32,6 @@
     </header>
 
     {% if page == 'home' %}
-    <section class="glass panel" id="upload">
-      <h2>上传抓包文件</h2>
-      <form id="uploadForm">
-        <label class="upload-shell" aria-label="PCAP 文件">
-          <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
-          <span class="file-btn">选择文件</span>
-          <span id="fileName" class="file-name"></span>
-        </label>
-
-        <div id="uploadProgress" class="progress" aria-label="上传进度" hidden>
-          <div id="uploadProgressBar" class="progress-bar"></div>
-          <span id="uploadProgressText" class="progress-text">上传中 0%</span>
-        </div>
-
-        <div class="actions">
-          <button aria-label="上传并分析" type="submit">上传并分析</button>
-          <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
-        </div>
-      </form>
-    </section>
-
     <section class="glass panel filter-panel">
       <div class="panel-head">
         <div>
@@ -102,8 +81,8 @@
     </section>
 
     <h3 class="row-tag">统计</h3>
-    <section class="grid-three charts-gap">
-      <section class="glass panel chart-panel">
+      <section class="grid-three charts-gap">
+      <section class="glass panel chart-panel chart-panel-pie">
         <div class="panel-head"><h2>类别分布</h2><span class="subtle">按 AI 大类</span></div>
         <canvas id="majorPie"></canvas>
       </section>
@@ -151,37 +130,63 @@
     {% endif %}
 
     {% if page == 'config' %}
-    <section class="glass panel">
-      <h2>配置中心</h2>
-      <p class="subtle">确认配置前会先进行连通性探测。</p>
+    <section class="config-grid">
+      <section class="glass panel">
+        <h2>自建AI配置</h2>
+        <form id="cfgForm" class="inline-config-form">
+          <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <button aria-label="保存配置" type="submit">保存</button>
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+        </form>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
 
-      <h3 class="config-title">自建AI配置</h3>
-      <form id="cfgForm" class="inline-config-form">
-        <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
-        <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
-        <button aria-label="保存配置" type="submit">保存</button>
-        <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
-      </form>
-      <table id="cfgTable">
-        <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <section class="glass panel" id="upload">
+        <h2>上传抓包文件</h2>
+        <form id="uploadForm">
+          <label class="upload-shell" aria-label="PCAP 文件">
+            <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
+            <span class="file-btn">选择文件</span>
+            <span id="fileName" class="file-name"></span>
+          </label>
 
-      <h3 class="config-title">RAG配置</h3>
-      <form id="ragForm" class="inline-config-form">
-        <input name="rag_name" placeholder="RAG名称，如 rag-index" required />
-        <input name="rag_target" placeholder="目标地址，如 10.0.0.8:8000" required />
-        <button type="submit">确认配置</button>
-      </form>
-      <p id="ragStatus" class="subtle"></p>
+          <div id="uploadProgress" class="progress" aria-label="上传进度" hidden>
+            <div id="uploadProgressBar" class="progress-bar"></div>
+            <span id="uploadProgressText" class="progress-text">上传中 0%</span>
+          </div>
 
-      <h3 class="config-title">MCP配置</h3>
-      <form id="mcpForm" class="inline-config-form">
-        <input name="mcp_name" placeholder="MCP名称，如 mcp-tool" required />
-        <input name="mcp_target" placeholder="目标地址，如 10.0.0.9:9000" required />
-        <button type="submit">确认配置</button>
-      </form>
-      <p id="mcpStatus" class="subtle"></p>
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>RAG配置</h2>
+        <p class="subtle">确认配置前会先进行连通性探测。</p>
+        <form id="ragForm" class="inline-config-form inline-config-form-compact">
+          <input name="rag_name" placeholder="RAG名称，如 rag-index" required />
+          <input name="rag_target" placeholder="目标地址，如 10.0.0.8:8000" required />
+          <button type="submit">确认配置</button>
+        </form>
+        <p id="ragStatus" class="subtle"></p>
+      </section>
+
+      <section class="glass panel">
+        <h2>MCP配置</h2>
+        <p class="subtle">确认配置前会先进行连通性探测。</p>
+        <form id="mcpForm" class="inline-config-form inline-config-form-compact">
+          <input name="mcp_name" placeholder="MCP名称，如 mcp-tool" required />
+          <input name="mcp_target" placeholder="目标地址，如 10.0.0.9:9000" required />
+          <button type="submit">确认配置</button>
+        </form>
+        <p id="mcpStatus" class="subtle"></p>
+      </section>
     </section>
     {% endif %}
 
@@ -275,6 +280,7 @@
         ...extra,
       };
     }
+    function shortLabel(text, max = 12) { const s = String(text || ''); return s.length > max ? `${s.slice(0, max)}…` : s; }
 
     function buildDerived(entries) {
       const byMajor = groupBy(entries, e => e.category_major || '未知');
@@ -311,11 +317,11 @@
       const derived = buildDerived(entries);
       const minuteLabels = derived.minuteSeries.map(i => i.label);
 
-      if (has('majorPie')) charts.majorPie = new Chart($('majorPie'), { type: 'doughnut', data: { labels, datasets: [{ data: counts, backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }] }, options: chartOptions({ cutout: '62%', scales: {} }) });
+      if (has('majorPie')) charts.majorPie = new Chart($('majorPie'), { type: 'doughnut', data: { labels, datasets: [{ data: counts, backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }] }, options: chartOptions({ cutout: '62%', aspectRatio: 1, scales: {} }) });
       if (has('requestLine')) charts.requestLine = new Chart($('requestLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: 'Request数', data: derived.minuteSeries.map(i => i.count), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.16)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0, color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } } }) });
       if (has('statusBar')) charts.statusBar = new Chart($('statusBar'), { type: 'bar', data: { labels: ['健康', '关注', '告警'], datasets: [{ label: '请求数', data: [derived.statusCounts.green, derived.statusCounts.yellow, derived.statusCounts.red], backgroundColor: ['#4dbb7a', '#f0c24b', '#e45d6e'], borderRadius: 10 }] }, options: chartOptions({ plugins: { legend: { display: false } } }) });
-      if (has('minorTopBar')) charts.minorTopBar = new Chart($('minorTopBar'), { type: 'bar', data: { labels: derived.topMinor.map(i => i.label), datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
-      if (has('flowTopBar')) charts.flowTopBar = new Chart($('flowTopBar'), { type: 'bar', data: { labels: derived.topFlows.map(i => flowIps(i.label)), datasets: [{ label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 }, { label: '平均 Duration(s)', data: derived.topFlows.map(i => i.avgDuration), backgroundColor: '#ffc56e', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
+      if (has('minorTopBar')) charts.minorTopBar = new Chart($('minorTopBar'), { type: 'bar', data: { labels: derived.topMinor.map(i => shortLabel(i.label, 10)), datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
+      if (has('flowTopBar')) charts.flowTopBar = new Chart($('flowTopBar'), { type: 'bar', data: { labels: derived.topFlows.map(i => shortLabel(flowIps(i.label), 14)), datasets: [{ label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 }] }, options: chartOptions({ indexAxis: 'y' }) });
       if (has('hourBar')) charts.hourBar = new Chart($('hourBar'), { type: 'bar', data: { labels: derived.hourTrend.map(i => i.label), datasets: [{ label: '请求数', data: derived.hourTrend.map(i => i.count), backgroundColor: '#67d4b6', borderRadius: 8 }] }, options: chartOptions() });
       if (has('durationLine')) charts.durationLine = new Chart($('durationLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 Duration(s)', data: derived.minuteSeries.map(i => i.avgDuration), borderColor: '#ffc56e', backgroundColor: 'rgba(255,197,110,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
       if (has('ttftTrend')) charts.ttftTrend = new Chart($('ttftTrend'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 TTFT(ms)', data: derived.minuteSeries.map(i => i.avgTtft), borderColor: '#89d0ff', backgroundColor: 'rgba(137,208,255,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
