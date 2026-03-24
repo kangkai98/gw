@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 网关观测台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <main class="container">
+    <header class="hero glass">
+      <div>
+        <h1>AI 网关观测台</h1>
+        <p>基于现有网络侧解析结果，统一展示流量规模、Duration 结构、Token 效率、热点模型与流级别质量。</p>
+      </div>
+      <div class="hero-note">
+        <span class="badge">Network-side AI Gateway</span>
+        <span class="hero-tip">无需修改 parser，所有新图表均由前端基于现有 entries/stats 聚合生成。</span>
+      </div>
+    </header>
+
+    <section class="cards cards-8">
+      <article class="stat glass"><h3>总 Request 数</h3><p id="totalEntries">0</p><small>全部请求规模</small></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p><small>输入 token 总量</small></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p><small>输出 token 总量</small></article>
+      <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p><small>实时请求速率</small></article>
+      <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
+      <article class="stat glass"><h3>平均 TTFT(ms)</h3><p id="avgTtft">0.0</p><small>首 token 平均耗时</small></article>
+      <article class="stat glass"><h3>平均 TPOT</h3><p id="avgTpot">0.0</p><small>ms / token</small></article>
+      <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
+    </section>
+
+    <section class="grid-two">
+      <section class="glass panel">
+        <h2>上传抓包文件</h2>
+        <form id="uploadForm">
+          <label class="upload-shell" aria-label="PCAP 文件">
+            <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
+            <span class="file-btn">选择文件</span>
+            <span id="fileName" class="file-name"></span>
+          </label>
+
+          <div id="uploadProgress" class="progress" aria-label="上传进度" hidden>
+            <div id="uploadProgressBar" class="progress-bar"></div>
+            <span id="uploadProgressText" class="progress-text">上传中 0%</span>
+          </div>
+
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>自建 AI 配置</h2>
+        <form id="cfgForm" class="inline-form">
+          <input aria-label="小类名称" name="name" placeholder="小类名称，如 小微助手" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP:端口，如 192.168.101.1:443" required />
+          <button aria-label="保存配置" type="submit">保存</button>
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+        </form>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>小类</th><th>IP:Port</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </section>
+
+    <section class="glass panel filter-panel">
+      <div class="panel-head">
+        <div>
+          <h2>筛选条件</h2>
+          <p class="subtle">通过时间范围与 AI 大类快速聚焦目标流量，再观察下方所有图表联动变化。</p>
+        </div>
+      </div>
+      <form id="filterForm" class="filter-form">
+        <div class="range-box">
+          <label>
+            <span>开始时间</span>
+            <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
+          </label>
+          <span class="range-sep">至</span>
+          <label>
+            <span>结束时间</span>
+            <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
+          </label>
+        </div>
+        <select id="majorFilter" aria-label="筛选AI大类">
+          <option value="">全部大类</option>
+          <option value="三方AI">三方AI</option>
+          <option value="自建AI">自建AI</option>
+          <option value="实验AI">实验AI</option>
+        </select>
+        <button type="submit" aria-label="应用筛选" class="filter-btn">应用筛选</button>
+        <button type="button" id="resetFilter" class="filter-btn ghost-btn" aria-label="重置筛选">重置</button>
+      </form>
+    </section>
+
+    <section class="grid-three charts-gap">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>AI 类别分布</h2><span class="subtle">大类结构</span></div>
+        <canvas id="majorPie"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>Request 数时间变化图</h2><span class="subtle">按分钟聚合</span></div>
+        <canvas id="requestLine"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>Duration 曲线图</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="durationLine"></canvas>
+      </section>
+    </section>
+
+    <section class="grid-three">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>输入输出 Token 趋势</h2><span class="subtle">按分钟聚合</span></div>
+        <canvas id="tokenTrend"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TPOT 对比图</h2><span class="subtle">按 AI 大类平均</span></div>
+        <canvas id="tpotBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TPOT 趋势图</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="tpotTrend"></canvas>
+      </section>
+    </section>
+
+    <section class="grid-three">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>热门 AI 小类 Top 5</h2><span class="subtle">按请求量</span></div>
+        <canvas id="minorTopBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>热点流 Top 5</h2><span class="subtle">按请求量 / 平均 Duration</span></div>
+        <canvas id="flowTopBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>请求状态概览</h2><span class="subtle">基于 TTFT + TPOT 的红黄绿健康分层</span></div>
+        <canvas id="statusBar"></canvas>
+      </section>
+    </section>
+
+    <section class="grid-three">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>Duration 分布直方图</h2><span class="subtle">按秒区间</span></div>
+        <canvas id="durationHist"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>输出 Token vs Duration</h2><span class="subtle">效率散点图</span></div>
+        <canvas id="scatterChart"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>小时级请求热度</h2><span class="subtle">按小时聚合</span></div>
+        <canvas id="hourBar"></canvas>
+      </section>
+    </section>
+
+    <section class="glass panel insights-panel">
+      <div class="panel-head">
+        <h2>关键观察</h2>
+        <span class="subtle">前端基于现有数据自动生成</span>
+      </div>
+      <div class="insight-grid" id="insightGrid"></div>
+    </section>
+
+    <section class="glass panel">
+      <div class="panel-head">
+        <h2>Request 列表</h2>
+        <div class="status-legend">
+          <span class="status-pill"><i class="light green"></i>健康</span>
+          <span class="status-pill"><i class="light yellow"></i>关注</span>
+          <span class="status-pill"><i class="light red"></i>告警</span>
+        </div>
+      </div>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <p id="status" class="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    const charts = {};
+    const palette = ['#7aa2ff', '#67d4b6', '#ffc56e', '#d7b8ff', '#89d0ff', '#ff8fa6', '#76b7ff', '#9adfa8'];
+    const num1 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(1));
+    const num2 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(2));
+    const num3 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(3));
+    const compact = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v)));
+
+    function destroyAllCharts() {
+      Object.values(charts).forEach(c => c?.destroy?.());
+    }
+
+    function flowIps(flowKey) {
+      if (!flowKey || !flowKey.includes('-')) return '-';
+      const [a, b] = flowKey.split('-');
+      return `${a} ↔ ${b}`;
+    }
+
+    function toServerTime(v) {
+      if (!v) return '';
+      return v.replace('T', ' ') + ':00';
+    }
+
+    function queryString() {
+      const startReal = toServerTime(document.getElementById('startReal').value);
+      const endReal = toServerTime(document.getElementById('endReal').value);
+      const major = document.getElementById('majorFilter').value;
+      const q = new URLSearchParams();
+      if (startReal) q.set('start_real', startReal);
+      if (endReal) q.set('end_real', endReal);
+      if (major) q.set('category_major', major);
+      const qs = q.toString();
+      return qs ? `?${qs}` : '';
+    }
+
+    function percentile(values, p) {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+      return sorted[idx] || 0;
+    }
+
+    function avg(values) {
+      if (!values.length) return 0;
+      return values.reduce((s, v) => s + v, 0) / values.length;
+    }
+
+    function groupBy(items, keyFn) {
+      const map = new Map();
+      items.forEach(item => {
+        const key = keyFn(item);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(item);
+      });
+      return map;
+    }
+
+    function classifyStatus(entry) {
+      const ttft = Number(entry.ttft_ms || 0);
+      const tpot = Number(entry.tpot_ms_per_token || 0);
+      if (ttft >= 3500 || tpot >= 180) return { label: '告警', cls: 'red' };
+      if (ttft >= 1800 || tpot >= 90) return { label: '关注', cls: 'yellow' };
+      return { label: '健康', cls: 'green' };
+    }
+
+    function chartOptions(extra = {}) {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } },
+          tooltip: { backgroundColor: 'rgba(27,40,67,.92)', titleColor: '#fff', bodyColor: '#e8f0ff', padding: 12, cornerRadius: 12 },
+          ...extra.plugins,
+        },
+        scales: {
+          x: { ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } },
+          y: { ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' }, beginAtZero: true },
+          ...extra.scales,
+        },
+        ...extra,
+      };
+    }
+
+    function buildDerived(entries) {
+      const byMajor = groupBy(entries, e => e.category_major || '未知');
+      const byMinor = groupBy(entries, e => e.category_minor || '未知');
+      const byFlow = groupBy(entries, e => e.flow_key || '未知');
+      const byMinute = groupBy(entries, e => (e.start_time_real || '').slice(0, 16));
+      const byHour = groupBy(entries, e => (e.start_time_real || '').slice(11, 13));
+
+      const topMinor = Array.from(byMinor.entries())
+        .map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      const topFlows = Array.from(byFlow.entries())
+        .map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      const minuteSeries = Array.from(byMinute.entries())
+        .filter(([k]) => !!k)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([label, rows]) => ({
+          label,
+          input: rows.reduce((s, r) => s + Number(r.input_tokens || 0), 0),
+          output: rows.reduce((s, r) => s + Number(r.output_tokens || 0), 0),
+          count: rows.length,
+          avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)),
+          avgTpot: avg(rows.map(r => Number(r.tpot_ms_per_token || 0)).filter(v => v > 0)),
+        }));
+
+      const hourTrend = Array.from({ length: 24 }, (_, h) => {
+        const hh = String(h).padStart(2, '0');
+        const rows = byHour.get(hh) || [];
+        return { label: `${hh}:00`, count: rows.length };
+      });
+
+      const durationBins = [0, 0.5, 1, 2, 3, 5, 10, Infinity];
+      const durationLabels = ['0-0.5s', '0.5-1s', '1-2s', '2-3s', '3-5s', '5-10s', '10s+'];
+      const durationCounts = new Array(durationLabels.length).fill(0);
+      entries.forEach(e => {
+        const sec = Number(e.latency_ms || 0) / 1000;
+        for (let i = 0; i < durationBins.length - 1; i++) {
+          if (sec >= durationBins[i] && sec < durationBins[i + 1]) {
+            durationCounts[i] += 1;
+            break;
+          }
+        }
+      });
+
+      const statusCounts = { green: 0, yellow: 0, red: 0 };
+      entries.forEach((entry) => {
+        statusCounts[classifyStatus(entry).cls] += 1;
+      });
+
+      const scatterDatasets = Array.from(byMajor.entries()).map(([label, rows], idx) => ({
+        label,
+        data: rows.map(r => ({ x: Number(r.output_tokens || 0), y: Number(r.latency_ms || 0) / 1000 })),
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        backgroundColor: palette[idx % palette.length],
+      }));
+
+      const avgDuration = avg(entries.map(e => Number(e.latency_ms || 0) / 1000));
+      const avgTtft = avg(entries.map(e => Number(e.ttft_ms || 0)));
+      const avgTpot = avg(entries.map(e => Number(e.tpot_ms_per_token || 0)).filter(v => v > 0));
+      const hottestMinor = topMinor[0]?.label || '-';
+
+      const insights = [
+        {
+          title: 'Duration 长尾',
+          value: `${num2(percentile(entries.map(e => Number(e.latency_ms || 0) / 1000), 95))}s`,
+          desc: '当前筛选范围内最大的 P95 duration，用于快速判断长尾风险。',
+        },
+        {
+          title: '最热小类',
+          value: hottestMinor,
+          desc: topMinor[0] ? `请求数 ${topMinor[0].count}，平均 Duration ${num2(topMinor[0].avgDuration)}s。` : '暂无数据。',
+        },
+        {
+          title: '热点流',
+          value: topFlows[0] ? flowIps(topFlows[0].label) : '-',
+          desc: topFlows[0] ? `请求数 ${topFlows[0].count}，平均 Duration ${num2(topFlows[0].avgDuration)}s。` : '暂无数据。',
+        },
+        {
+          title: '状态概览',
+          value: `绿 ${statusCounts.green} / 黄 ${statusCounts.yellow} / 红 ${statusCounts.red}`,
+          desc: '基于 TTFT + TPOT 的健康分层结果，可用于快速识别异常请求。',
+        },
+      ];
+
+      return {
+        topMinor,
+        topFlows,
+        minuteSeries,
+        hourTrend,
+        durationLabels,
+        durationCounts,
+        statusCounts,
+        scatterDatasets,
+        hottestMinor,
+        avgDuration,
+        avgTtft,
+        avgTpot,
+        insights,
+        majorTpot: Array.from(byMajor.entries()).map(([label, rows]) => ({
+          label,
+          value: avg(rows.map(r => Number(r.tpot_ms_per_token || 0)).filter(v => v > 0)),
+        })),
+      };
+    }
+
+    function drawCharts(rows, stats, entries) {
+      destroyAllCharts();
+      const labels = rows.map(r => r.category_major);
+      const counts = rows.map(r => r.total_entries);
+      const derived = buildDerived(entries);
+      const minuteLabels = derived.minuteSeries.map(i => i.label);
+
+      charts.majorPie = new Chart(document.getElementById('majorPie'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: counts, backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }] },
+        options: chartOptions({ cutout: '62%', scales: {} })
+      });
+
+      charts.requestLine = new Chart(document.getElementById('requestLine'), {
+        type: 'line',
+        data: {
+          labels: minuteLabels,
+          datasets: [{
+            label: 'Request数',
+            data: derived.minuteSeries.map(i => i.count),
+            borderColor: '#7aa2ff',
+            backgroundColor: 'rgba(122,162,255,.16)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
+          }]
+        },
+        options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0, color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } } })
+      });
+
+      charts.durationLine = new Chart(document.getElementById('durationLine'), {
+        type: 'line',
+        data: {
+          labels: minuteLabels,
+          datasets: [{
+            label: '平均 Duration(s)',
+            data: derived.minuteSeries.map(i => i.avgDuration),
+            borderColor: '#ffc56e',
+            backgroundColor: 'rgba(255,197,110,.18)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
+          }]
+        },
+        options: chartOptions()
+      });
+
+      charts.tokenTrend = new Chart(document.getElementById('tokenTrend'), {
+        type: 'line',
+        data: {
+          labels: minuteLabels,
+          datasets: [
+            { label: '输入Token', data: derived.minuteSeries.map(i => i.input), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.14)', fill: false, tension: 0.25 },
+            { label: '输出Token', data: derived.minuteSeries.map(i => i.output), borderColor: '#67d4b6', backgroundColor: 'rgba(103,212,182,.14)', fill: false, tension: 0.25 },
+          ]
+        },
+        options: chartOptions()
+      });
+
+      charts.tpotBar = new Chart(document.getElementById('tpotBar'), {
+        type: 'bar',
+        data: {
+          labels: derived.majorTpot.map(i => i.label),
+          datasets: [{ label: '平均 TPOT(ms/token)', data: derived.majorTpot.map(i => i.value), backgroundColor: '#86dfca', borderRadius: 10 }]
+        },
+        options: chartOptions()
+      });
+
+      charts.tpotTrend = new Chart(document.getElementById('tpotTrend'), {
+        type: 'line',
+        data: {
+          labels: minuteLabels,
+          datasets: [{
+            label: '平均 TPOT(ms/token)',
+            data: derived.minuteSeries.map(i => i.avgTpot),
+            borderColor: '#d7b8ff',
+            backgroundColor: 'rgba(215,184,255,.20)',
+            fill: true,
+            pointRadius: 2,
+            tension: 0.28,
+          }]
+        },
+        options: chartOptions()
+      });
+
+      charts.minorTopBar = new Chart(document.getElementById('minorTopBar'), {
+        type: 'bar',
+        data: {
+          labels: derived.topMinor.map(i => i.label),
+          datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }]
+        },
+        options: chartOptions({ indexAxis: 'y' })
+      });
+
+      charts.flowTopBar = new Chart(document.getElementById('flowTopBar'), {
+        type: 'bar',
+        data: {
+          labels: derived.topFlows.map(i => flowIps(i.label)),
+          datasets: [
+            { label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 },
+            { label: '平均 Duration(s)', data: derived.topFlows.map(i => i.avgDuration), backgroundColor: '#ffc56e', borderRadius: 10 },
+          ]
+        },
+        options: chartOptions({ indexAxis: 'y' })
+      });
+
+      charts.statusBar = new Chart(document.getElementById('statusBar'), {
+        type: 'bar',
+        data: {
+          labels: ['健康', '关注', '告警'],
+          datasets: [{
+            label: '请求数',
+            data: [derived.statusCounts.green, derived.statusCounts.yellow, derived.statusCounts.red],
+            backgroundColor: ['#4dbb7a', '#f0c24b', '#e45d6e'],
+            borderRadius: 10,
+          }]
+        },
+        options: chartOptions({ plugins: { legend: { display: false } } })
+      });
+
+      charts.durationHist = new Chart(document.getElementById('durationHist'), {
+        type: 'bar',
+        data: {
+          labels: derived.durationLabels,
+          datasets: [{ label: '请求数', data: derived.durationCounts, backgroundColor: '#7aa2ff', borderRadius: 10 }]
+        },
+        options: chartOptions()
+      });
+
+      charts.scatterChart = new Chart(document.getElementById('scatterChart'), {
+        type: 'scatter',
+        data: { datasets: derived.scatterDatasets },
+        options: chartOptions({
+          plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } } },
+          scales: {
+            x: { title: { display: true, text: '输出 Token', color: '#55647f' }, ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } },
+            y: { title: { display: true, text: 'Duration(s)', color: '#55647f' }, ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' }, beginAtZero: true },
+          }
+        })
+      });
+
+      charts.hourBar = new Chart(document.getElementById('hourBar'), {
+        type: 'bar',
+        data: {
+          labels: derived.hourTrend.map(i => i.label),
+          datasets: [{ label: '请求数', data: derived.hourTrend.map(i => i.count), backgroundColor: '#67d4b6', borderRadius: 8 }]
+        },
+        options: chartOptions()
+      });
+
+      document.getElementById('avgDuration').textContent = num2(derived.avgDuration);
+      document.getElementById('avgTtft').textContent = num1(derived.avgTtft);
+      document.getElementById('avgTpot').textContent = num1(derived.avgTpot);
+      document.getElementById('topMinor').textContent = derived.hottestMinor;
+      document.getElementById('insightGrid').innerHTML = derived.insights.map(item => `
+        <article class="insight-card">
+          <h3>${item.title}</h3>
+          <p class="insight-value">${item.value}</p>
+          <p class="insight-desc">${item.desc}</p>
+        </article>
+      `).join('');
+    }
+
+    async function refreshAll() {
+      const qs = queryString();
+      const [statsResp, entriesResp, cfgResp] = await Promise.all([
+        fetch(`/api/stats${qs}`), fetch(`/api/entries${qs}`), fetch('/api/self-hosted')
+      ]);
+      const stats = await statsResp.json();
+      const entries = (await entriesResp.json()).items || [];
+      const cfgs = (await cfgResp.json()).items || [];
+
+      document.getElementById('totalEntries').textContent = stats.total_entries ?? 0;
+      document.getElementById('totalInput').textContent = compact(stats.total_input_tokens);
+      document.getElementById('totalOutput').textContent = compact(stats.total_output_tokens);
+      document.getElementById('rps').textContent = num1(stats.rps);
+
+      document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
+        const statusInfo = classifyStatus(e);
+        return `
+          <tr>
+            <td>${e.id}</td><td>${e.start_time_real}</td><td>${num1(e.start_time_rel_s)}</td><td>${num3((e.latency_ms || 0) / 1000)}</td>
+            <td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td>
+            <td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td>
+            <td>${e.input_tokens}</td><td>${e.output_tokens}</td>
+            <td><span class="status-pill"><i class="light ${statusInfo.cls}"></i>${statusInfo.label}</span></td>
+          </tr>
+        `;
+      }).join('');
+
+      document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `
+        <tr>
+          <td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td>
+          <td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td>
+        </tr>
+      `).join('');
+
+      document.querySelectorAll('[data-del]').forEach(btn => {
+        btn.onclick = async () => {
+          await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' });
+          await refreshAll();
+        };
+      });
+
+      drawCharts(stats.major_stats || [], stats, entries);
+    }
+
+    function uploadWithProgress(formData) {
+      return new Promise((resolve, reject) => {
+        const progress = document.getElementById('uploadProgress');
+        const bar = document.getElementById('uploadProgressBar');
+        const text = document.getElementById('uploadProgressText');
+        progress.hidden = false;
+        bar.style.width = '0%';
+        text.textContent = '上传中 0%';
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload');
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return;
+          const pct = Math.min(99, Math.round((evt.loaded / evt.total) * 100));
+          bar.style.width = `${pct}%`;
+          text.textContent = `上传中 ${pct}%`;
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            bar.style.width = '100%';
+            text.textContent = '上传完成，正在解析...';
+            try {
+              resolve(JSON.parse(xhr.responseText || '{}'));
+            } catch (e) {
+              reject(e);
+            }
+          } else {
+            reject(new Error(`上传失败: ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('网络异常，上传失败'));
+        xhr.send(formData);
+      });
+    }
+
+    document.getElementById('pcapFile').onchange = (e) => {
+      document.getElementById('fileName').textContent = e.target.files?.[0]?.name || '';
+    };
+
+    document.getElementById('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        const data = await uploadWithProgress(fd);
+        document.getElementById('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`;
+        await refreshAll();
+      } catch (err) {
+        document.getElementById('status').textContent = `上传失败：${err.message || err}`;
+      } finally {
+        setTimeout(() => {
+          document.getElementById('uploadProgress').hidden = true;
+        }, 800);
+      }
+    };
+
+    document.getElementById('clearEntries').onclick = async () => {
+      await fetch('/api/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '记录已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      e.target.reset();
+      document.getElementById('status').textContent = '自建配置已保存。';
+      await refreshAll();
+    };
+
+    document.getElementById('clearCfg').onclick = async () => {
+      await fetch('/api/self-hosted/clear', { method: 'POST' });
+      document.getElementById('status').textContent = '自建配置已清空并重置序号。';
+      await refreshAll();
+    };
+
+    document.getElementById('filterForm').onsubmit = async (e) => {
+      e.preventDefault();
+      await refreshAll();
+    };
+
+    document.getElementById('resetFilter').onclick = async () => {
+      document.getElementById('startReal').value = '';
+      document.getElementById('endReal').value = '';
+      document.getElementById('majorFilter').value = '';
+      await refreshAll();
+    };
+
+    refreshAll();
+  </script>
+</body>
+</html>
