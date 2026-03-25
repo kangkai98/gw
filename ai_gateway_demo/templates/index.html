@@ -185,30 +185,20 @@
 
     {% if page == 'probe' %}
     <section class="glass panel">
-      <h2>拨测 - curl 报文</h2>
-      <p class="subtle">用于配置并发送 curl 请求到大模型服务，查看返回结果。</p>
+      <h2>拨测 - OpenAI / vLLM</h2>
+      <p class="subtle">系统会自动组装标准 OpenAI Chat Completions 请求，仅需填写 Key、URL 和问题。</p>
       <form id="probeForm" class="probe-form panel-content-gap">
         <label class="filter-item">
-          <span>目标 URL</span>
-          <input name="target" placeholder="https://api.example.com/v1/chat/completions" required />
+          <span>API Key</span>
+          <input name="api_key" placeholder="sk-xxxx" required />
         </label>
         <label class="filter-item">
-          <span>HTTP 方法</span>
-          <select name="method">
-            <option value="POST">POST</option>
-            <option value="GET">GET</option>
-            <option value="PUT">PUT</option>
-            <option value="PATCH">PATCH</option>
-            <option value="DELETE">DELETE</option>
-          </select>
+          <span>服务 URL</span>
+          <input name="target" placeholder="https://api.openai.com 或 http://127.0.0.1:8000" required />
         </label>
         <label class="filter-item probe-full">
-          <span>请求头（每行一个，格式：Key: Value）</span>
-          <textarea name="headers" rows="5" placeholder="Authorization: Bearer sk-xxx&#10;Content-Type: application/json"></textarea>
-        </label>
-        <label class="filter-item probe-full">
-          <span>请求体</span>
-          <textarea name="body" rows="8" placeholder='{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hello"}]}'></textarea>
+          <span>问题</span>
+          <textarea name="question" rows="6" placeholder="请简要介绍你自己" required></textarea>
         </label>
         <div class="actions probe-full">
           <button type="submit">发送拨测</button>
@@ -491,7 +481,7 @@
       const fd = new FormData(e.target);
       const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
       const data = await resp.json();
-      $('probeResult').textContent = `状态: ${data.ok ? '成功' : '失败'} (code=${data.code ?? '-'})\n${data.message || ''}\n\nSTDOUT:\n${data.stdout || '-'}\n\nSTDERR:\n${data.stderr || '-'}`;
+      $('probeResult').textContent = `状态: ${data.ok ? '成功' : '失败'} (code=${data.code ?? '-'})\n${data.message || ''}\n模型: ${data.model || '-'}\n请求地址: ${data.chat_url || '-'}\n\n响应:\n${data.stdout || '-'}\n\n错误:\n${data.stderr || '-'}`;
       $('status').textContent = data.ok ? '拨测完成。' : '拨测失败，请检查参数。';
     };
 

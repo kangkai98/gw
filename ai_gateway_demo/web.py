@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import subprocess
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -166,37 +167,72 @@ def api_connectivity_check(target: str = Form(...), timeout_sec: float = Form(de
 @app.post("/api/probe-curl")
 def api_probe_curl(
     target: str = Form(...),
-    method: str = Form(default="POST"),
-    headers: str = Form(default=""),
-    body: str = Form(default=""),
+    api_key: str = Form(...),
+    question: str = Form(...),
     timeout_sec: float = Form(default=20.0),
 ):
-    url = (target or "").strip()
-    if not url:
+    raw_target = (target or "").strip().rstrip("/")
+    if not raw_target:
         return {"ok": False, "message": "目标 URL 不能为空"}
+    if not (api_key or "").strip():
+        return {"ok": False, "message": "API Key 不能为空"}
+    if not (question or "").strip():
+        return {"ok": False, "message": "问题不能为空"}
 
-    safe_method = (method or "POST").strip().upper()
-    if safe_method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
-        return {"ok": False, "message": f"不支持的方法: {safe_method}"}
+    if "/chat/completions" in raw_target:
+        chat_url = raw_target
+        v1_prefix = raw_target.split("/v1/", 1)[0] + "/v1" if "/v1/" in raw_target else ""
+    elif raw_target.endswith("/v1"):
+        chat_url = f"{raw_target}/chat/completions"
+        v1_prefix = raw_target
+    else:
+        chat_url = f"{raw_target}/v1/chat/completions"
+        v1_prefix = f"{raw_target}/v1"
 
+    auth_header = f"Authorization: Bearer {api_key.strip()}"
+    model_name = "gpt-4o-mini"
+
+    if v1_prefix:
+        models_cmd = [
+            "curl",
+            "-sS",
+            "--max-time",
+            str(max(1.0, min(float(timeout_sec), 90.0))),
+            f"{v1_prefix}/models",
+            "-H",
+            auth_header,
+        ]
+        try:
+            model_resp = subprocess.run(models_cmd, capture_output=True, text=True, check=False)
+            if model_resp.returncode == 0 and model_resp.stdout.strip():
+                parsed = json.loads(model_resp.stdout)
+                model_name = parsed.get("data", [{}])[0].get("id") or model_name
+        except Exception:
+            pass
+
+    body = json.dumps(
+        {
+            "model": model_name,
+            "messages": [{"role": "user", "content": question.strip()}],
+            "stream": False,
+        },
+        ensure_ascii=False,
+    )
     cmd = [
         "curl",
         "-sS",
         "-X",
-        safe_method,
+        "POST",
         "--max-time",
         str(max(1.0, min(float(timeout_sec), 90.0))),
-        url,
+        chat_url,
+        "-H",
+        auth_header,
+        "-H",
+        "Content-Type: application/json",
+        "--data",
+        body,
     ]
-
-    for line in (headers or "").splitlines():
-        part = line.strip()
-        if not part:
-            continue
-        cmd.extend(["-H", part])
-
-    if body.strip():
-        cmd.extend(["--data", body])
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
@@ -211,4 +247,6 @@ def api_probe_curl(
         "stderr": (proc.stderr or "")[:4000],
         "message": "请求完成" if ok else "请求失败",
         "command": " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""),
+        "model": model_name,
+        "chat_url": chat_url,
     }
