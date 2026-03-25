@@ -168,6 +168,7 @@ def api_connectivity_check(target: str = Form(...), timeout_sec: float = Form(de
 def api_probe_curl(
     target: str = Form(...),
     api_key: str = Form(...),
+    model: str = Form(...),
     question: str = Form(...),
     timeout_sec: float = Form(default=20.0),
 ):
@@ -178,37 +179,18 @@ def api_probe_curl(
         return {"ok": False, "message": "API Key 不能为空"}
     if not (question or "").strip():
         return {"ok": False, "message": "问题不能为空"}
+    if not (model or "").strip():
+        return {"ok": False, "message": "模型名不能为空"}
 
     if "/chat/completions" in raw_target:
         chat_url = raw_target
-        v1_prefix = raw_target.split("/v1/", 1)[0] + "/v1" if "/v1/" in raw_target else ""
     elif raw_target.endswith("/v1"):
         chat_url = f"{raw_target}/chat/completions"
-        v1_prefix = raw_target
     else:
         chat_url = f"{raw_target}/v1/chat/completions"
-        v1_prefix = f"{raw_target}/v1"
 
     auth_header = f"Authorization: Bearer {api_key.strip()}"
-    model_name = "gpt-4o-mini"
-
-    if v1_prefix:
-        models_cmd = [
-            "curl",
-            "-sS",
-            "--max-time",
-            str(max(1.0, min(float(timeout_sec), 90.0))),
-            f"{v1_prefix}/models",
-            "-H",
-            auth_header,
-        ]
-        try:
-            model_resp = subprocess.run(models_cmd, capture_output=True, text=True, check=False)
-            if model_resp.returncode == 0 and model_resp.stdout.strip():
-                parsed = json.loads(model_resp.stdout)
-                model_name = parsed.get("data", [{}])[0].get("id") or model_name
-        except Exception:
-            pass
+    model_name = model.strip()
 
     body = json.dumps(
         {
@@ -240,6 +222,21 @@ def api_probe_curl(
         return {"ok": False, "message": f"curl 执行失败: {exc}"}
 
     ok = proc.returncode == 0
+    response_text = ""
+    error_reason = (proc.stderr or "").strip()
+    if (proc.stdout or "").strip():
+        try:
+            parsed = json.loads(proc.stdout)
+            if isinstance(parsed, dict):
+                response_text = str(parsed.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+                if not response_text and parsed.get("error"):
+                    error_reason = str(parsed.get("error"))
+        except Exception:
+            if ok:
+                response_text = (proc.stdout or "").strip()[:8000]
+            else:
+                error_reason = (proc.stdout or "").strip()[:4000] or error_reason
+
     return {
         "ok": ok,
         "code": proc.returncode,
@@ -249,4 +246,6 @@ def api_probe_curl(
         "command": " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""),
         "model": model_name,
         "chat_url": chat_url,
+        "response_text": response_text,
+        "error_reason": error_reason,
     }

@@ -160,12 +160,25 @@
       </section>
 
       <section class="glass panel">
+        <h2>网关配置</h2>
+        <p class="subtle">确认配置前会先进行连通性探测。</p>
+        <form id="gatewayForm" class="inline-config-form inline-config-form-compact">
+          <input name="gateway_name" placeholder="网关名称，如 ai-gateway" required />
+          <input name="gateway_target" placeholder="目标地址，如 10.0.0.2:8080" required />
+          <button type="submit">确认配置</button>
+          <button id="clearGatewayCfg" type="button" class="warn">清空网关</button>
+        </form>
+        <p id="gatewayStatus" class="subtle"></p>
+      </section>
+
+      <section class="glass panel">
         <h2>RAG配置</h2>
         <p class="subtle">确认配置前会先进行连通性探测。</p>
         <form id="ragForm" class="inline-config-form inline-config-form-compact">
           <input name="rag_name" placeholder="RAG名称，如 rag-index" required />
           <input name="rag_target" placeholder="目标地址，如 10.0.0.8:8000" required />
           <button type="submit">确认配置</button>
+          <button id="clearRagCfg" type="button" class="warn">清空RAG</button>
         </form>
         <p id="ragStatus" class="subtle"></p>
       </section>
@@ -177,8 +190,30 @@
           <input name="mcp_name" placeholder="MCP名称，如 mcp-tool" required />
           <input name="mcp_target" placeholder="目标地址，如 10.0.0.9:9000" required />
           <button type="submit">确认配置</button>
+          <button id="clearMcpCfg" type="button" class="warn">清空MCP</button>
         </form>
         <p id="mcpStatus" class="subtle"></p>
+      </section>
+
+      <section class="glass panel topology-panel">
+        <h2>连接拓扑</h2>
+        <p class="subtle">展示网关、RAG、MCP连接关系。</p>
+        <div class="topology-graph">
+          <div class="node node-gw">
+            <strong>网关</strong>
+            <small id="topoGateway">未配置</small>
+          </div>
+          <div class="edge edge-rag">→</div>
+          <div class="node node-rag">
+            <strong>RAG</strong>
+            <small id="topoRag">未配置</small>
+          </div>
+          <div class="edge edge-mcp">→</div>
+          <div class="node node-mcp">
+            <strong>MCP</strong>
+            <small id="topoMcp">未配置</small>
+          </div>
+        </div>
       </section>
     </section>
     {% endif %}
@@ -196,9 +231,13 @@
           <span>服务 URL</span>
           <input name="target" placeholder="https://api.openai.com 或 http://127.0.0.1:8000" required />
         </label>
+        <label class="filter-item">
+          <span>模型名</span>
+          <input name="model" placeholder="gpt-4o-mini / Qwen2.5-7B-Instruct" required />
+        </label>
         <label class="filter-item probe-full">
           <span>问题</span>
-          <textarea name="question" rows="6" placeholder="请简要介绍你自己" required></textarea>
+          <textarea name="question" rows="6" required>你好</textarea>
         </label>
         <div class="actions probe-full">
           <button type="submit">发送拨测</button>
@@ -221,7 +260,7 @@
       <table id="entryTable">
         <thead>
           <tr>
-            <th>ID</th><th>开始时间(真实)</th><th>开始时间(相对s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
+            <th>ID</th><th>开始时间(真实)</th><th>相对开始时间(s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
             <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
           </tr>
         </thead>
@@ -239,6 +278,7 @@
     const num1 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(1));
     const num2 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(2));
     const num3 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(3));
+    const num6 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(6));
     const compact = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v)));
 
     function $(id) { return document.getElementById(id); }
@@ -246,21 +286,21 @@
     function destroyAllCharts() { Object.values(charts).forEach(c => c?.destroy?.()); }
     function flowIps(flowKey) { if (!flowKey || !flowKey.includes('-')) return '-'; const [a, b] = flowKey.split('-'); return `${a} ↔ ${b}`; }
     function toServerTime(v) { if (!v) return ''; return v.replace('T', ' ') + ':00'; }
-    function toDatetimeLocal(d) { const pad = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; }
+    const loadCfg = (key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
+    const saveCfg = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+    const clearCfgLocal = (key) => localStorage.removeItem(key);
 
-    function applyQuickRange(range) {
-      if (!has('startReal') || !has('endReal')) return;
-      const start = $('startReal');
-      const end = $('endReal');
-      if (range === 'clear') { start.value = ''; end.value = ''; return; }
-      const now = new Date();
-      const from = new Date(now.getTime());
-      if (range === '15m') from.setMinutes(from.getMinutes() - 15);
-      if (range === '1h') from.setHours(from.getHours() - 1);
-      if (range === '6h') from.setHours(from.getHours() - 6);
-      if (range === '24h') from.setHours(from.getHours() - 24);
-      start.value = toDatetimeLocal(from);
-      end.value = toDatetimeLocal(now);
+    function renderTopology() {
+      if (!has('topoGateway')) return;
+      const gw = loadCfg('gateway_cfg');
+      const rag = loadCfg('rag_cfg');
+      const mcp = loadCfg('mcp_cfg');
+      $('topoGateway').textContent = gw ? `${gw.name} @ ${gw.target}` : '未配置';
+      $('topoRag').textContent = rag ? `${rag.name} @ ${rag.target}` : '未配置';
+      $('topoMcp').textContent = mcp ? `${mcp.name} @ ${mcp.target}` : '未配置';
+      if (has('gatewayStatus')) $('gatewayStatus').textContent = gw ? `已配置：${gw.name} (${gw.target})` : '';
+      if (has('ragStatus')) $('ragStatus').textContent = rag ? `已配置：${rag.name} (${rag.target})` : '';
+      if (has('mcpStatus')) $('mcpStatus').textContent = mcp ? `已配置：${mcp.name} (${mcp.target})` : '';
     }
 
     function queryString() {
@@ -406,7 +446,7 @@
       if (has('entryTable')) {
         document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
           const statusInfo = classifyStatus(e);
-          return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num1(e.start_time_rel_s)}</td><td>${num3((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${statusInfo.cls}" title="${statusInfo.label}"></i></td></tr>`;
+          return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${statusInfo.cls}" title="${statusInfo.label}"></i></td></tr>`;
         }).join('');
       }
 
@@ -463,28 +503,59 @@
     if (has('ragForm')) $('ragForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const result = await checkConnectivity(String(fd.get('rag_target') || ''));
+      const name = String(fd.get('rag_name') || '').trim();
+      const target = String(fd.get('rag_target') || '').trim();
+      const result = await checkConnectivity(target);
       $('ragStatus').textContent = result.message;
+      if (result.ok) {
+        saveCfg('rag_cfg', { name, target });
+        renderTopology();
+      }
       $('status').textContent = result.ok ? 'RAG 配置确认成功。' : 'RAG 配置确认失败。';
     };
 
     if (has('mcpForm')) $('mcpForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const result = await checkConnectivity(String(fd.get('mcp_target') || ''));
+      const name = String(fd.get('mcp_name') || '').trim();
+      const target = String(fd.get('mcp_target') || '').trim();
+      const result = await checkConnectivity(target);
       $('mcpStatus').textContent = result.message;
+      if (result.ok) {
+        saveCfg('mcp_cfg', { name, target });
+        renderTopology();
+      }
       $('status').textContent = result.ok ? 'MCP 配置确认成功。' : 'MCP 配置确认失败。';
     };
+
+    if (has('gatewayForm')) $('gatewayForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get('gateway_name') || '').trim();
+      const target = String(fd.get('gateway_target') || '').trim();
+      const result = await checkConnectivity(target);
+      $('gatewayStatus').textContent = result.message;
+      if (result.ok) {
+        saveCfg('gateway_cfg', { name, target });
+        renderTopology();
+      }
+      $('status').textContent = result.ok ? '网关配置确认成功。' : '网关配置确认失败。';
+    };
+
+    if (has('clearGatewayCfg')) $('clearGatewayCfg').onclick = () => { clearCfgLocal('gateway_cfg'); renderTopology(); $('status').textContent = '网关配置已清空。'; };
+    if (has('clearRagCfg')) $('clearRagCfg').onclick = () => { clearCfgLocal('rag_cfg'); renderTopology(); $('status').textContent = 'RAG配置已清空。'; };
+    if (has('clearMcpCfg')) $('clearMcpCfg').onclick = () => { clearCfgLocal('mcp_cfg'); renderTopology(); $('status').textContent = 'MCP配置已清空。'; };
 
     if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
       const data = await resp.json();
-      $('probeResult').textContent = `状态: ${data.ok ? '成功' : '失败'} (code=${data.code ?? '-'})\n${data.message || ''}\n模型: ${data.model || '-'}\n请求地址: ${data.chat_url || '-'}\n\n响应:\n${data.stdout || '-'}\n\n错误:\n${data.stderr || '-'}`;
+      $('probeResult').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
       $('status').textContent = data.ok ? '拨测完成。' : '拨测失败，请检查参数。';
     };
 
+    renderTopology();
     if (document.body.dataset.page !== 'probe') {
       refreshAll();
     }
