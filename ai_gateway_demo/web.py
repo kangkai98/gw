@@ -3,6 +3,7 @@ from __future__ import annotations
 import socket
 import subprocess
 import json
+import shlex
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -228,7 +229,14 @@ def api_probe_curl(
         try:
             parsed = json.loads(proc.stdout)
             if isinstance(parsed, dict):
-                response_text = str(parsed.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+                choice = (parsed.get("choices") or [{}])[0]
+                content = (choice.get("message") or {}).get("content", "")
+                if isinstance(content, list):
+                    response_text = "".join(str(i.get("text", "")) for i in content if isinstance(i, dict)).strip()
+                else:
+                    response_text = str(content).strip()
+                if not response_text and choice.get("text"):
+                    response_text = str(choice.get("text")).strip()
                 if not response_text and parsed.get("error"):
                     error_reason = str(parsed.get("error"))
         except Exception:
@@ -243,7 +251,7 @@ def api_probe_curl(
         "stdout": (proc.stdout or "")[:20000],
         "stderr": (proc.stderr or "")[:4000],
         "message": "请求完成" if ok else "请求失败",
-        "command": " ".join(cmd[:8]) + (" ..." if len(cmd) > 8 else ""),
+        "command": " ".join(shlex.quote(part) for part in cmd),
         "model": model_name,
         "chat_url": chat_url,
         "response_text": response_text,
