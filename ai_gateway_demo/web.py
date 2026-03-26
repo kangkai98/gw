@@ -167,20 +167,18 @@ def api_connectivity_check(target: str = Form(...), timeout_sec: float = Form(de
 
 @app.post("/api/probe-curl")
 def api_probe_curl(
-    target: str = Form(...),
-    api_key: str = Form(...),
-    model: str = Form(...),
+    target: str = Form(default=""),
+    api_key: str = Form(default=""),
+    model: str = Form(default=""),
     curl_raw: str = Form(default=""),
     question: str = Form(default="你好"),
     timeout_sec: float = Form(default=20.0),
 ):
+    user_curl = (curl_raw or "").strip()
+    if not user_curl:
+        return {"ok": False, "message": "curl原文不能为空"}
+
     raw_target = (target or "").strip().rstrip("/")
-    if not raw_target:
-        return {"ok": False, "message": "目标 URL 不能为空"}
-    if not (api_key or "").strip():
-        return {"ok": False, "message": "API Key 不能为空"}
-    if not (model or "").strip():
-        return {"ok": False, "message": "模型名不能为空"}
 
     if "/chat/completions" in raw_target:
         chat_url = raw_target
@@ -192,7 +190,6 @@ def api_probe_curl(
     auth_header = f"Authorization: Bearer {api_key.strip()}"
     model_name = model.strip()
 
-    user_curl = (curl_raw or "").strip()
     if user_curl:
         try:
             cmd = shlex.split(user_curl)

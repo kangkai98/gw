@@ -213,24 +213,24 @@
 
     {% if page == 'probe' %}
     <section class="glass panel">
-      <h2>拨测 - OpenAI / vLLM</h2>
-      <p class="subtle">系统会自动组装标准 OpenAI Chat Completions 请求，仅需填写 Key、URL 和问题。</p>
+      <h2>拨测</h2>
+      <p class="subtle">填写 URL / 模型名 / API Key 后会自动生成 Curl 模板，也可直接粘贴自定义 Curl。</p>
       <form id="probeForm" class="probe-form panel-content-gap">
         <label class="filter-item">
           <span>服务 URL</span>
-          <input name="target" placeholder="https://api.openai.com 或 http://127.0.0.1:8000" required />
+          <input name="target" placeholder="https://api.openai.com 或 http://127.0.0.1:8000" />
         </label>
         <label class="filter-item">
           <span>模型名</span>
-          <input name="model" placeholder="gpt-4o-mini / Qwen2.5-7B-Instruct" required />
+          <input name="model" placeholder="gpt-4o-mini / Qwen2.5-7B-Instruct" />
         </label>
         <label class="filter-item">
           <span>API Key</span>
-          <input name="api_key" placeholder="sk-xxxx" required />
+          <input name="api_key" placeholder="sk-xxxx" />
         </label>
         <label class="filter-item probe-full">
           <span>curl 原文</span>
-          <textarea name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
+          <textarea id="curlRaw" name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
         </label>
         <div class="actions probe-full">
           <button type="submit">发送拨测</button>
@@ -286,6 +286,7 @@
     const saveCfg = (key, value) => localStorage.setItem(key, JSON.stringify(value));
     const clearCfgLocal = (key) => localStorage.removeItem(key);
     const show = (id, visible) => { if (!has(id)) return; $(id).classList.toggle('topo-hidden', !visible); };
+    let lastAutoCurlTemplate = '';
 
     function renderTopology() {
       if (!has('topoRag')) return;
@@ -303,6 +304,16 @@
       if (has('latGwRag')) $('latGwRag').textContent = rag?.latency_ms ? `${num1(rag.latency_ms)} ms` : '-';
       if (has('latGwMcp')) $('latGwMcp').textContent = mcp?.latency_ms ? `${num1(mcp.latency_ms)} ms` : '-';
       if (has('latGwLlm')) $('latGwLlm').textContent = llm?.latency_ms ? `${num1(llm.latency_ms)} ms` : '-';
+    }
+
+    function buildCurlTemplateFromFields(form) {
+      const fd = new FormData(form);
+      const target = String(fd.get('target') || '').trim().replace(/\/+$/, '');
+      const model = String(fd.get('model') || '').trim() || 'gpt-4o-mini';
+      const apiKey = String(fd.get('api_key') || '').trim() || 'sk-xxxx';
+      const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
+      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false });
+      return `curl -X POST '${chatUrl}' -H 'Authorization: Bearer ${apiKey}' -H 'Content-Type: application/json' --data '${payload}'`;
     }
 
     function queryString() {
@@ -564,11 +575,30 @@
     if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const curlRaw = String(fd.get('curl_raw') || '').trim();
+      if (!curlRaw) {
+        $('status').textContent = '请先填写 curl 原文。';
+        return;
+      }
       const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
       const data = await resp.json();
       if (has('probeResultText')) $('probeResultText').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
       $('status').textContent = data.ok ? '已发送，拨测完成。' : '已发送，但拨测失败。';
     };
+
+    if (has('probeForm') && has('curlRaw')) {
+      const form = $('probeForm');
+      const raw = $('curlRaw');
+      const syncTemplate = () => {
+        const current = raw.value.trim();
+        if (!current || current === lastAutoCurlTemplate) {
+          lastAutoCurlTemplate = buildCurlTemplateFromFields(form);
+          raw.value = lastAutoCurlTemplate;
+        }
+      };
+      form.querySelectorAll('input[name="target"], input[name="model"], input[name="api_key"]').forEach(el => el.addEventListener('input', syncTemplate));
+      syncTemplate();
+    }
 
     renderTopology();
     if (document.body.dataset.page !== 'probe') {
