@@ -170,7 +170,8 @@ def api_probe_curl(
     target: str = Form(...),
     api_key: str = Form(...),
     model: str = Form(...),
-    question: str = Form(...),
+    curl_raw: str = Form(default=""),
+    question: str = Form(default="你好"),
     timeout_sec: float = Form(default=20.0),
 ):
     raw_target = (target or "").strip().rstrip("/")
@@ -178,8 +179,6 @@ def api_probe_curl(
         return {"ok": False, "message": "目标 URL 不能为空"}
     if not (api_key or "").strip():
         return {"ok": False, "message": "API Key 不能为空"}
-    if not (question or "").strip():
-        return {"ok": False, "message": "问题不能为空"}
     if not (model or "").strip():
         return {"ok": False, "message": "模型名不能为空"}
 
@@ -193,29 +192,38 @@ def api_probe_curl(
     auth_header = f"Authorization: Bearer {api_key.strip()}"
     model_name = model.strip()
 
-    body = json.dumps(
-        {
-            "model": model_name,
-            "messages": [{"role": "user", "content": question.strip()}],
-            "stream": False,
-        },
-        ensure_ascii=False,
-    )
-    cmd = [
-        "curl",
-        "-sS",
-        "-X",
-        "POST",
-        "--max-time",
-        str(max(1.0, min(float(timeout_sec), 90.0))),
-        chat_url,
-        "-H",
-        auth_header,
-        "-H",
-        "Content-Type: application/json",
-        "--data",
-        body,
-    ]
+    user_curl = (curl_raw or "").strip()
+    if user_curl:
+        try:
+            cmd = shlex.split(user_curl)
+        except Exception:
+            return {"ok": False, "message": "curl原文解析失败，请检查引号与转义"}
+        if not cmd or cmd[0] != "curl":
+            return {"ok": False, "message": "curl原文必须以 curl 开头"}
+    else:
+        body = json.dumps(
+            {
+                "model": model_name,
+                "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
+                "stream": False,
+            },
+            ensure_ascii=False,
+        )
+        cmd = [
+            "curl",
+            "-sS",
+            "-X",
+            "POST",
+            "--max-time",
+            str(max(1.0, min(float(timeout_sec), 90.0))),
+            chat_url,
+            "-H",
+            auth_header,
+            "-H",
+            "Content-Type: application/json",
+            "--data",
+            body,
+        ]
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)

@@ -185,21 +185,26 @@
 
       <section class="glass panel topology-panel">
         <h2>连接拓扑</h2>
-        <p class="subtle">展示当前服务（网关）与 RAG、MCP 的连接关系。</p>
+        <p class="subtle">配置成功后显示实体、连线与探测时延。</p>
         <div class="topology-graph topology-graph-fancy">
           <div class="topo-node topo-node-gw">
             <strong>网关</strong>
             <small>当前服务</small>
           </div>
-          <div class="topo-link topo-link-rag"></div>
-          <div class="topo-link topo-link-mcp"></div>
-          <div class="topo-node topo-node-rag">
+          <div id="lineGwRag" class="topo-link topo-link-rag topo-hidden"><span id="latGwRag" class="topo-lat">-</span></div>
+          <div id="lineGwMcp" class="topo-link topo-link-mcp topo-hidden"><span id="latGwMcp" class="topo-lat">-</span></div>
+          <div id="lineGwLlm" class="topo-link topo-link-llm topo-hidden"><span id="latGwLlm" class="topo-lat">-</span></div>
+          <div id="nodeRag" class="topo-node topo-node-rag topo-hidden">
             <strong>RAG</strong>
             <small id="topoRag">未配置</small>
           </div>
-          <div class="topo-node topo-node-mcp">
+          <div id="nodeMcp" class="topo-node topo-node-mcp topo-hidden">
             <strong>MCP</strong>
             <small id="topoMcp">未配置</small>
+          </div>
+          <div id="nodeLlm" class="topo-node topo-node-llm topo-hidden">
+            <strong>LLM</strong>
+            <small id="topoLlm">未配置</small>
           </div>
         </div>
       </section>
@@ -224,17 +229,16 @@
           <input name="api_key" placeholder="sk-xxxx" required />
         </label>
         <label class="filter-item probe-full">
-          <span>问题</span>
-          <textarea name="question" rows="6" required>你好</textarea>
+          <span>curl 原文</span>
+          <textarea name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
         </label>
         <div class="actions probe-full">
           <button type="submit">发送拨测</button>
         </div>
-        <div class="probe-curl-preview probe-full">
-          <div class="subtle">即将发送的 curl</div>
-          <pre id="probeCurlPreview">请填写 URL / 模型 / API Key / 问题。</pre>
+        <div id="probeResult" class="probe-response probe-full">
+          <div class="probe-response-head">响应结果</div>
+          <pre id="probeResultText">暂未发送请求。</pre>
         </div>
-        <div id="probeResult" class="probe-result probe-full">暂未发送请求。</div>
       </form>
     </section>
     {% endif %}
@@ -281,26 +285,24 @@
     const loadCfg = (key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
     const saveCfg = (key, value) => localStorage.setItem(key, JSON.stringify(value));
     const clearCfgLocal = (key) => localStorage.removeItem(key);
+    const show = (id, visible) => { if (!has(id)) return; $(id).classList.toggle('topo-hidden', !visible); };
 
     function renderTopology() {
       if (!has('topoRag')) return;
       const rag = loadCfg('rag_cfg');
       const mcp = loadCfg('mcp_cfg');
+      const llm = loadCfg('llm_cfg');
       $('topoRag').textContent = rag ? `${rag.name} @ ${rag.target}` : '未配置';
       $('topoMcp').textContent = mcp ? `${mcp.name} @ ${mcp.target}` : '未配置';
+      if (has('topoLlm')) $('topoLlm').textContent = llm ? `${llm.name} @ ${llm.target}` : '未配置';
       if (has('ragStatus')) $('ragStatus').textContent = rag ? `已配置：${rag.name} (${rag.target})` : '';
       if (has('mcpStatus')) $('mcpStatus').textContent = mcp ? `已配置：${mcp.name} (${mcp.target})` : '';
-    }
-
-    function buildProbeCurlPreview(fd) {
-      const target = String(fd.get('target') || '').trim().replace(/\/+$/, '');
-      const model = String(fd.get('model') || '').trim();
-      const key = String(fd.get('api_key') || '').trim();
-      const question = String(fd.get('question') || '').trim() || '你好';
-      if (!target || !model || !key) return '请填写 URL / 模型 / API Key / 问题。';
-      const chatUrl = target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`);
-      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: question }], stream: false });
-      return `curl -X POST '${chatUrl}' \\\n+  -H 'Authorization: Bearer ${key}' \\\n+  -H 'Content-Type: application/json' \\\n+  --data '${payload}'`;
+      show('nodeRag', !!rag); show('lineGwRag', !!rag);
+      show('nodeMcp', !!mcp); show('lineGwMcp', !!mcp);
+      show('nodeLlm', !!llm); show('lineGwLlm', !!llm);
+      if (has('latGwRag')) $('latGwRag').textContent = rag?.latency_ms ? `${num1(rag.latency_ms)} ms` : '-';
+      if (has('latGwMcp')) $('latGwMcp').textContent = mcp?.latency_ms ? `${num1(mcp.latency_ms)} ms` : '-';
+      if (has('latGwLlm')) $('latGwLlm').textContent = llm?.latency_ms ? `${num1(llm.latency_ms)} ms` : '-';
     }
 
     function queryString() {
@@ -452,6 +454,13 @@
 
       if (has('cfgTable')) {
         document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
+        if (cfgs.length > 0) {
+          const llmOld = loadCfg('llm_cfg') || {};
+          saveCfg('llm_cfg', { name: cfgs[0].name, target: cfgs[0].server_ip, latency_ms: llmOld.latency_ms || null });
+        } else {
+          clearCfgLocal('llm_cfg');
+        }
+        renderTopology();
       }
 
       document.querySelectorAll('[data-del]').forEach(btn => { btn.onclick = async () => { await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' }); await refreshAll(); }; });
@@ -495,7 +504,24 @@
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
     if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
-    if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); await fetch('/api/self-hosted', { method: 'POST', body: fd }); e.target.reset(); $('status').textContent = '自建配置已保存。'; await refreshAll(); };
+    if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      const name = String(fd.get('name') || '').trim();
+      const target = String(fd.get('server_ip') || '').trim();
+      let latencyMs = null;
+      if (target.includes(':')) {
+        const t0 = performance.now();
+        const result = await checkConnectivity(target);
+        latencyMs = result.ok ? (performance.now() - t0) : null;
+      }
+      saveCfg('llm_cfg', { name, target, latency_ms: latencyMs });
+      e.target.reset();
+      $('status').textContent = '自建配置已保存。';
+      renderTopology();
+      await refreshAll();
+    };
     if (has('clearCfg')) $('clearCfg').onclick = async () => { await fetch('/api/self-hosted/clear', { method: 'POST' }); $('status').textContent = '自建配置已清空并重置序号。'; await refreshAll(); };
     if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
     if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
@@ -505,10 +531,12 @@
       const fd = new FormData(e.target);
       const name = String(fd.get('rag_name') || '').trim();
       const target = String(fd.get('rag_target') || '').trim();
+      const t0 = performance.now();
       const result = await checkConnectivity(target);
+      const latencyMs = result.ok ? (performance.now() - t0) : null;
       $('ragStatus').textContent = result.message;
       if (result.ok) {
-        saveCfg('rag_cfg', { name, target });
+        saveCfg('rag_cfg', { name, target, latency_ms: latencyMs });
         renderTopology();
       }
       $('status').textContent = result.ok ? 'RAG 配置确认成功。' : 'RAG 配置确认失败。';
@@ -519,10 +547,12 @@
       const fd = new FormData(e.target);
       const name = String(fd.get('mcp_name') || '').trim();
       const target = String(fd.get('mcp_target') || '').trim();
+      const t0 = performance.now();
       const result = await checkConnectivity(target);
+      const latencyMs = result.ok ? (performance.now() - t0) : null;
       $('mcpStatus').textContent = result.message;
       if (result.ok) {
-        saveCfg('mcp_cfg', { name, target });
+        saveCfg('mcp_cfg', { name, target, latency_ms: latencyMs });
         renderTopology();
       }
       $('status').textContent = result.ok ? 'MCP 配置确认成功。' : 'MCP 配置确认失败。';
@@ -531,19 +561,12 @@
     if (has('clearRagCfg')) $('clearRagCfg').onclick = () => { clearCfgLocal('rag_cfg'); renderTopology(); $('status').textContent = 'RAG配置已清空。'; };
     if (has('clearMcpCfg')) $('clearMcpCfg').onclick = () => { clearCfgLocal('mcp_cfg'); renderTopology(); $('status').textContent = 'MCP配置已清空。'; };
 
-    if (has('probeForm')) {
-      const form = $('probeForm');
-      const updateProbePreview = () => { if (has('probeCurlPreview')) $('probeCurlPreview').textContent = buildProbeCurlPreview(new FormData(form)); };
-      form.querySelectorAll('input, textarea').forEach(el => el.addEventListener('input', updateProbePreview));
-      updateProbePreview();
-    }
-
     if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
       const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
       const data = await resp.json();
-      $('probeResult').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
+      if (has('probeResultText')) $('probeResultText').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
       $('status').textContent = data.ok ? '已发送，拨测完成。' : '已发送，但拨测失败。';
     };
 
