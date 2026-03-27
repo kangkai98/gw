@@ -218,11 +218,11 @@
       <form id="probeForm" class="probe-form panel-content-gap">
         <label class="filter-item">
           <span>服务 URL</span>
-          <input name="target" placeholder="https://api.openai.com 或 http://127.0.0.1:8000" />
+          <input name="target" placeholder="https://api.openai.com/v1 或 http://127.0.0.1:8000/v1" />
         </label>
         <label class="filter-item">
           <span>模型名</span>
-          <input name="model" placeholder="gpt-4o-mini / Qwen2.5-7B-Instruct" />
+          <input name="model" placeholder="gpt-4o-mini" />
         </label>
         <label class="filter-item">
           <span>API Key</span>
@@ -233,10 +233,10 @@
           <textarea id="curlRaw" name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
         </label>
         <div class="actions probe-full">
-          <button type="submit">发送拨测</button>
+          <button id="probeSendBtn" type="submit">发送拨测</button>
         </div>
         <div id="probeResult" class="probe-response probe-full">
-          <div class="probe-response-head">响应结果</div>
+          <div id="probeResponseHead" class="probe-response-head">响应结果</div>
           <pre id="probeResultText">暂未发送请求。</pre>
         </div>
       </form>
@@ -312,8 +312,8 @@
       const model = String(fd.get('model') || '').trim() || 'gpt-4o-mini';
       const apiKey = String(fd.get('api_key') || '').trim() || 'sk-xxxx';
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
-      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false });
-      return `curl -X POST '${chatUrl}' -H 'Authorization: Bearer ${apiKey}' -H 'Content-Type: application/json' --data '${payload}'`;
+      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
+      return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
     }
 
     function queryString() {
@@ -578,12 +578,17 @@
       const curlRaw = String(fd.get('curl_raw') || '').trim();
       if (!curlRaw) {
         $('status').textContent = '请先填写 curl 原文。';
+        if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（未发送）';
         return;
       }
+      if (has('probeSendBtn')) { $('probeSendBtn').disabled = true; $('probeSendBtn').textContent = '发送中...'; }
+      if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（发送中）';
       const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
       const data = await resp.json();
       if (has('probeResultText')) $('probeResultText').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
       $('status').textContent = data.ok ? '已发送，拨测完成。' : '已发送，但拨测失败。';
+      if (has('probeResponseHead')) $('probeResponseHead').textContent = data.ok ? '响应结果（已发送 ✓）' : '响应结果（已发送 ×）';
+      if (has('probeSendBtn')) { $('probeSendBtn').disabled = false; $('probeSendBtn').textContent = '发送拨测'; }
     };
 
     if (has('probeForm') && has('curlRaw')) {

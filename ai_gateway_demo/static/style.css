@@ -123,18 +123,18 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .probe-response-head { padding: 10px 12px; font-size: 12px; color: #4d6287; border-bottom: 1px solid rgba(86,112,159,.14); background: rgba(255,255,255,.58); }
 .probe-response pre { margin: 0; padding: 12px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.55; max-height: 360px; overflow: auto; }
 .topology-panel { grid-column: 1 / -1; }
-.topology-graph-fancy { position: relative; margin-top: 14px; min-height: 280px; border-radius: 18px; border: 1px solid rgba(86,112,159,.14); background: radial-gradient(120% 120% at 0% 0%, rgba(122,162,255,.16), rgba(255,255,255,.55)); padding: 18px; overflow: hidden; }
+.topology-graph-fancy { position: relative; margin-top: 14px; min-height: 300px; border-radius: 18px; border: 1px solid rgba(86,112,159,.14); background: radial-gradient(120% 120% at 0% 0%, rgba(122,162,255,.16), rgba(255,255,255,.55)); padding: 18px; overflow: visible; }
 .topo-link { position: absolute; height: 2px; background: linear-gradient(90deg, #7aa2ff, #67d4b6); top: 50%; transform: translateY(-50%); box-shadow: 0 0 0 2px rgba(122,162,255,.08); }
-.topo-link-rag { left: 26%; top: 39%; width: 28%; transform: rotate(-22deg); transform-origin: left center; }
-.topo-link-mcp { left: 26%; top: 50%; width: 52%; transform: rotate(0deg); transform-origin: left center; }
-.topo-link-llm { left: 26%; top: 61%; width: 28%; transform: rotate(22deg); transform-origin: left center; }
+.topo-link-rag { left: 27%; top: 38%; width: 35%; transform: rotate(-15deg); transform-origin: left center; }
+.topo-link-mcp { left: 27%; top: 52%; width: 46%; transform: rotate(0deg); transform-origin: left center; }
+.topo-link-llm { left: 27%; top: 66%; width: 35%; transform: rotate(15deg); transform-origin: left center; }
 .topo-node { position: absolute; width: 24%; min-width: 180px; border-radius: 16px; border: 1px solid rgba(69,103,164,.2); background: rgba(255,255,255,.88); box-shadow: 0 10px 24px rgba(70,98,145,.14); padding: 14px; text-align: center; display: grid; gap: 6px; }
 .topo-node strong { font-size: 15px; color: #26447a; }
 .topo-node small { color: #5f6e87; font-size: 12px; word-break: break-word; }
-.topo-node-gw { left: 6%; top: 50%; transform: translateY(-50%); }
-.topo-node-rag { left: 57%; top: 12%; }
-.topo-node-mcp { right: 6%; top: 42%; }
-.topo-node-llm { left: 57%; top: 68%; }
+.topo-node-gw { left: 6%; top: 46%; transform: translateY(-50%); }
+.topo-node-rag { right: 8%; top: 9%; }
+.topo-node-mcp { right: 8%; top: 40%; }
+.topo-node-llm { right: 8%; top: 71%; }
 .topo-lat { position: absolute; top: -22px; right: 0; font-size: 11px; color: #4f607d; background: rgba(255,255,255,.82); border: 1px solid rgba(86,112,159,.16); padding: 2px 6px; border-radius: 999px; }
 .topo-hidden { display: none; }
 table { width: 100%; border-collapse: collapse; border-radius: 16px; overflow: hidden; }
