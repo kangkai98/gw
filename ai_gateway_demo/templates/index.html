@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 网关观测台</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body data-page="{{ page }}">
+  <div class="bg-glow"></div>
+
+  <aside class="sidebar-fixed glass">
+    <h2>导航</h2>
+    <nav class="side-nav">
+      <a href="/" class="{% if page == 'home' %}active{% endif %}">主页</a>
+      <a href="/config" class="{% if page == 'config' %}active{% endif %}">配置</a>
+      <a href="/records" class="{% if page == 'records' %}active{% endif %}">详细记录</a>
+      <a href="/probe" class="{% if page == 'probe' %}active{% endif %}">拨测</a>
+    </nav>
+  </aside>
+
+  <main class="page-wrap">
+    <header class="hero glass">
+      <div>
+        <h1>AI 网关观测台</h1>
+        <p>基于现有网络侧解析结果，统一展示流量规模、热点分布与时延表现。</p>
+      </div>
+      <div class="hero-note">
+        <span class="badge">Network-side AI Gateway</span>
+        <span class="hero-tip">页面分为主页、配置、详细记录、拨测四部分，便于按角色查看。</span>
+      </div>
+    </header>
+
+    {% if page == 'home' %}
+    <section class="glass panel filter-panel">
+      <div class="panel-head">
+        <div>
+          <h2>筛选条件</h2>
+        </div>
+      </div>
+      <form id="filterForm" class="filter-form">
+        <label class="filter-item">
+          <span>开始时间</span>
+          <input type="datetime-local" id="startReal" aria-label="筛选开始时间" />
+        </label>
+        <label class="filter-item">
+          <span>结束时间</span>
+          <input type="datetime-local" id="endReal" aria-label="筛选结束时间" />
+        </label>
+        <label class="filter-item">
+          <span>AI 大类</span>
+          <select id="majorFilter" aria-label="筛选AI大类">
+            <option value="">全部大类</option>
+            <option value="三方AI">三方AI</option>
+            <option value="自建AI">自建AI</option>
+            <option value="实验AI">实验AI</option>
+          </select>
+        </label>
+        <button type="submit" aria-label="应用筛选" class="filter-btn">应用筛选</button>
+        <button type="button" id="resetFilter" class="filter-btn ghost-btn" aria-label="重置筛选">重置</button>
+      </form>
+    </section>
+
+    <section class="cards cards-8 centered-cards">
+      <article class="stat glass"><h3>总 Request 数</h3><p id="totalEntries">0</p><small>全部请求规模</small></article>
+      <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p><small>实时请求速率</small></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p><small>输入 token 总量</small></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p><small>输出 token 总量</small></article>
+      <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
+      <article class="stat glass"><h3>平均 TTFT(ms)</h3><p id="avgTtft">0.0</p><small>首 token 平均耗时</small></article>
+      <article class="stat glass"><h3>平均 TPOT(ms/token)</h3><p id="avgTpot">0.0</p><small>单 token 生成耗时</small></article>
+      <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
+    </section>
+
+    <h3 class="row-tag">统计</h3>
+      <section class="grid-three charts-gap">
+      <section class="glass panel chart-panel chart-panel-pie">
+        <div class="panel-head"><h2>类别分布</h2><span class="subtle">按 AI 大类</span></div>
+        <canvas id="majorPie"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>时间分布</h2><span class="subtle">按分钟聚合</span></div>
+        <canvas id="requestLine"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>状态概览</h2><span class="subtle">基于 TTFT + TPOT</span></div>
+        <canvas id="statusBar"></canvas>
+      </section>
+    </section>
+
+    <h3 class="row-tag">热点</h3>
+    <section class="grid-three charts-gap">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>小类 Top 5</h2><span class="subtle">按请求量</span></div>
+        <canvas id="minorTopBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>流 Top 5</h2><span class="subtle">按请求量 / 平均 Duration</span></div>
+        <canvas id="flowTopBar"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>小时热度</h2><span class="subtle">按小时聚合</span></div>
+        <canvas id="hourBar"></canvas>
+      </section>
+    </section>
+
+    <h3 class="row-tag">时延</h3>
+    <section class="grid-three charts-gap">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>Duration 趋势</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="durationLine"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TTFT 趋势</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="ttftTrend"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>TPOT 趋势</h2><span class="subtle">按分钟平均</span></div>
+        <canvas id="tpotTrend"></canvas>
+      </section>
+    </section>
+    {% endif %}
+
+    {% if page == 'config' %}
+    <section class="config-grid">
+      <section class="glass panel" id="upload">
+        <h2>上传抓包文件</h2>
+        <form id="uploadForm" class="panel-content-gap">
+          <label class="upload-shell" aria-label="PCAP 文件">
+            <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
+            <span class="file-btn">选择文件</span>
+            <span id="fileName" class="file-name"></span>
+          </label>
+
+          <div id="uploadProgress" class="progress" aria-label="上传进度" hidden>
+            <div id="uploadProgressBar" class="progress-bar"></div>
+            <span id="uploadProgressText" class="progress-text">上传中 0%</span>
+          </div>
+
+          <div class="actions">
+            <button aria-label="上传并分析" type="submit">上传并分析</button>
+            <button aria-label="清空记录" id="clearEntries" type="button" class="danger">清空记录</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="glass panel">
+        <h2>自建AI配置</h2>
+        <form id="cfgForm" class="inline-config-form panel-content-gap">
+          <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
+          <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <button aria-label="保存配置" type="submit">保存</button>
+          <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
+        </form>
+        <table id="cfgTable">
+          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="glass panel">
+        <h2>RAG配置</h2>
+        <p class="subtle">确认配置前会先进行连通性探测。</p>
+        <form id="ragForm" class="inline-config-form inline-config-form-compact">
+          <input name="rag_name" placeholder="RAG名称，如 rag-index" required />
+          <input name="rag_target" placeholder="目标地址，如 10.0.0.8:8000" required />
+          <button type="submit">确认配置</button>
+          <button id="clearRagCfg" type="button" class="warn">清空RAG</button>
+        </form>
+        <p id="ragStatus" class="subtle"></p>
+      </section>
+
+      <section class="glass panel">
+        <h2>MCP配置</h2>
+        <p class="subtle">确认配置前会先进行连通性探测。</p>
+        <form id="mcpForm" class="inline-config-form inline-config-form-compact">
+          <input name="mcp_name" placeholder="MCP名称，如 mcp-tool" required />
+          <input name="mcp_target" placeholder="目标地址，如 10.0.0.9:9000" required />
+          <button type="submit">确认配置</button>
+          <button id="clearMcpCfg" type="button" class="warn">清空MCP</button>
+        </form>
+        <p id="mcpStatus" class="subtle"></p>
+      </section>
+
+      <section class="glass panel topology-panel">
+        <h2>连接拓扑</h2>
+        <p class="subtle">配置成功后显示实体、连线与探测时延。</p>
+        <div class="topology-graph topology-graph-fancy">
+          <div class="topo-node topo-node-gw">
+            <strong>网关</strong>
+            <small>当前服务</small>
+          </div>
+          <div id="lineGwRag" class="topo-link topo-link-rag topo-hidden"><span id="latGwRag" class="topo-lat">-</span></div>
+          <div id="lineGwMcp" class="topo-link topo-link-mcp topo-hidden"><span id="latGwMcp" class="topo-lat">-</span></div>
+          <div id="lineGwLlm" class="topo-link topo-link-llm topo-hidden"><span id="latGwLlm" class="topo-lat">-</span></div>
+          <div id="nodeRag" class="topo-node topo-node-rag topo-hidden">
+            <strong>RAG</strong>
+            <small id="topoRag">未配置</small>
+          </div>
+          <div id="nodeMcp" class="topo-node topo-node-mcp topo-hidden">
+            <strong>MCP</strong>
+            <small id="topoMcp">未配置</small>
+          </div>
+          <div id="nodeLlm" class="topo-node topo-node-llm topo-hidden">
+            <strong>LLM</strong>
+            <small id="topoLlm">未配置</small>
+          </div>
+        </div>
+      </section>
+    </section>
+    {% endif %}
+
+    {% if page == 'probe' %}
+    <section class="glass panel">
+      <h2>拨测</h2>
+      <p class="subtle">填写 URL / 模型名 / API Key 后会自动生成 Curl 模板，也可直接粘贴自定义 Curl。</p>
+      <form id="probeForm" class="probe-form panel-content-gap">
+        <label class="filter-item">
+          <span>服务 URL</span>
+          <input name="target" placeholder="https://api.openai.com/v1 或 http://127.0.0.1:8000/v1" />
+        </label>
+        <label class="filter-item">
+          <span>模型名</span>
+          <input name="model" placeholder="gpt-4o-mini" />
+        </label>
+        <label class="filter-item">
+          <span>API Key</span>
+          <input name="api_key" placeholder="sk-xxxx" />
+        </label>
+        <label class="filter-item probe-full">
+          <span>curl 原文</span>
+          <textarea id="curlRaw" name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
+        </label>
+        <div class="actions probe-full">
+          <button id="probeSendBtn" type="submit">发送拨测</button>
+        </div>
+        <div id="probeResult" class="probe-response probe-full">
+          <div id="probeResponseHead" class="probe-response-head">响应结果</div>
+          <pre id="probeResultText">暂未发送请求。</pre>
+        </div>
+      </form>
+    </section>
+    {% endif %}
+
+    {% if page == 'records' %}
+    <section class="glass panel" id="records">
+      <div class="panel-head">
+        <h2>Request 列表</h2>
+        <div class="status-legend">
+          <span class="status-pill"><i class="light green"></i>健康</span>
+          <span class="status-pill"><i class="light yellow"></i>关注</span>
+          <span class="status-pill"><i class="light red"></i>告警</span>
+        </div>
+      </div>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>开始时间(真实)</th><th>相对开始时间(s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    <p id="status" class="status" aria-live="polite"></p>
+  </main>
+
+  <script>
+    const charts = {};
+    const palette = ['#7aa2ff', '#67d4b6', '#ffc56e', '#d7b8ff', '#89d0ff', '#ff8fa6', '#76b7ff', '#9adfa8'];
+    const num1 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(1));
+    const num2 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(2));
+    const num3 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(3));
+    const num6 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(6));
+    const compact = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v)));
+
+    function $(id) { return document.getElementById(id); }
+    function has(id) { return !!$(id); }
+    function destroyAllCharts() { Object.values(charts).forEach(c => c?.destroy?.()); }
+    function flowIps(flowKey) { if (!flowKey || !flowKey.includes('-')) return '-'; const [a, b] = flowKey.split('-'); return `${a} ↔ ${b}`; }
+    function toServerTime(v) { if (!v) return ''; return v.replace('T', ' ') + ':00'; }
+    const loadCfg = (key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
+    const saveCfg = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+    const clearCfgLocal = (key) => localStorage.removeItem(key);
+    const show = (id, visible) => { if (!has(id)) return; $(id).classList.toggle('topo-hidden', !visible); };
+    let lastAutoCurlTemplate = '';
+
+    function renderTopology() {
+      if (!has('topoRag')) return;
+      const rag = loadCfg('rag_cfg');
+      const mcp = loadCfg('mcp_cfg');
+      const llm = loadCfg('llm_cfg');
+      $('topoRag').textContent = rag ? `${rag.name} @ ${rag.target}` : '未配置';
+      $('topoMcp').textContent = mcp ? `${mcp.name} @ ${mcp.target}` : '未配置';
+      if (has('topoLlm')) $('topoLlm').textContent = llm ? `${llm.name} @ ${llm.target}` : '未配置';
+      if (has('ragStatus')) $('ragStatus').textContent = rag ? `已配置：${rag.name} (${rag.target})` : '';
+      if (has('mcpStatus')) $('mcpStatus').textContent = mcp ? `已配置：${mcp.name} (${mcp.target})` : '';
+      show('nodeRag', !!rag); show('lineGwRag', !!rag);
+      show('nodeMcp', !!mcp); show('lineGwMcp', !!mcp);
+      show('nodeLlm', !!llm); show('lineGwLlm', !!llm);
+      if (has('latGwRag')) $('latGwRag').textContent = rag?.latency_ms ? `${num1(rag.latency_ms)} ms` : '-';
+      if (has('latGwMcp')) $('latGwMcp').textContent = mcp?.latency_ms ? `${num1(mcp.latency_ms)} ms` : '-';
+      if (has('latGwLlm')) $('latGwLlm').textContent = llm?.latency_ms ? `${num1(llm.latency_ms)} ms` : '-';
+    }
+
+    function buildCurlTemplateFromFields(form) {
+      const fd = new FormData(form);
+      const target = String(fd.get('target') || '').trim().replace(/\/+$/, '');
+      const model = String(fd.get('model') || '').trim() || 'gpt-4o-mini';
+      const apiKey = String(fd.get('api_key') || '').trim() || 'sk-xxxx';
+      const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
+      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
+      return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
+    }
+
+    function queryString() {
+      if (!has('majorFilter')) return '';
+      const startReal = toServerTime($('startReal').value);
+      const endReal = toServerTime($('endReal').value);
+      const major = $('majorFilter').value;
+      const q = new URLSearchParams();
+      if (startReal) q.set('start_real', startReal);
+      if (endReal) q.set('end_real', endReal);
+      if (major) q.set('category_major', major);
+      const qs = q.toString();
+      return qs ? `?${qs}` : '';
+    }
+
+    function percentile(values, p) { if (!values.length) return 0; const sorted = [...values].sort((a, b) => a - b); const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)); return sorted[idx] || 0; }
+    function avg(values) { if (!values.length) return 0; return values.reduce((s, v) => s + v, 0) / values.length; }
+    function groupBy(items, keyFn) { const map = new Map(); items.forEach(item => { const key = keyFn(item); if (!map.has(key)) map.set(key, []); map.get(key).push(item); }); return map; }
+    function classifyStatus(entry) { const ttft = Number(entry.ttft_ms || 0); const tpot = Number(entry.tpot_ms_per_token || 0); if (ttft >= 3500 || tpot >= 180) return { label: '告警', cls: 'red' }; if (ttft >= 1800 || tpot >= 90) return { label: '关注', cls: 'yellow' }; return { label: '健康', cls: 'green' }; }
+
+    function chartOptions(extra = {}) {
+      return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 10, color: '#40506a' } },
+          tooltip: { backgroundColor: 'rgba(27,40,67,.92)', titleColor: '#fff', bodyColor: '#e8f0ff', padding: 12, cornerRadius: 12 },
+          ...extra.plugins,
+        },
+        scales: {
+          x: { ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } },
+          y: { ticks: { color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' }, beginAtZero: true },
+          ...extra.scales,
+        },
+        ...extra,
+      };
+    }
+    function shortLabel(text, max = 12) { const s = String(text || ''); return s.length > max ? `${s.slice(0, max)}…` : s; }
+
+    function buildDerived(entries) {
+      const byMajor = groupBy(entries, e => e.category_major || '未知');
+      const byMinor = groupBy(entries, e => e.category_minor || '未知');
+      const byFlow = groupBy(entries, e => e.flow_key || '未知');
+      const byMinute = groupBy(entries, e => (e.start_time_real || '').slice(0, 16));
+      const byHour = groupBy(entries, e => (e.start_time_real || '').slice(11, 13));
+
+      const topMinor = Array.from(byMinor.entries()).map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) })).sort((a, b) => b.count - a.count).slice(0, 5);
+      const topFlows = Array.from(byFlow.entries()).map(([label, rows]) => ({ label, count: rows.length, avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)) })).sort((a, b) => b.count - a.count).slice(0, 5);
+      const minuteSeries = Array.from(byMinute.entries()).filter(([k]) => !!k).sort((a, b) => a[0].localeCompare(b[0])).map(([label, rows]) => ({
+        label,
+        count: rows.length,
+        avgDuration: avg(rows.map(r => Number(r.latency_ms || 0) / 1000)),
+        avgTpot: avg(rows.map(r => Number(r.tpot_ms_per_token || 0)).filter(v => v > 0)),
+        avgTtft: avg(rows.map(r => Number(r.ttft_ms || 0))),
+      }));
+      const hourTrend = Array.from({ length: 24 }, (_, h) => { const hh = String(h).padStart(2, '0'); const rows = byHour.get(hh) || []; return { label: `${hh}:00`, count: rows.length }; });
+      const statusCounts = { green: 0, yellow: 0, red: 0 };
+      entries.forEach((entry) => { statusCounts[classifyStatus(entry).cls] += 1; });
+      return {
+        topMinor, topFlows, minuteSeries, hourTrend, statusCounts,
+        avgDuration: avg(entries.map(e => Number(e.latency_ms || 0) / 1000)),
+        avgTtft: avg(entries.map(e => Number(e.ttft_ms || 0))),
+        avgTpot: avg(entries.map(e => Number(e.tpot_ms_per_token || 0)).filter(v => v > 0)),
+        hottestMinor: topMinor[0]?.label || '-',
+      };
+    }
+
+    function drawCharts(rows, stats, entries) {
+      destroyAllCharts();
+      const labels = rows.map(r => r.category_major);
+      const counts = rows.map(r => r.total_entries);
+      const derived = buildDerived(entries);
+      const minuteLabels = derived.minuteSeries.map(i => i.label);
+
+      if (has('majorPie')) charts.majorPie = new Chart($('majorPie'), { type: 'doughnut', data: { labels, datasets: [{ data: counts, backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }] }, options: chartOptions({ cutout: '62%', aspectRatio: 1, scales: {} }) });
+      if (has('requestLine')) charts.requestLine = new Chart($('requestLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: 'Request数', data: derived.minuteSeries.map(i => i.count), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.16)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0, color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } } }) });
+      if (has('statusBar')) charts.statusBar = new Chart($('statusBar'), { type: 'bar', data: { labels: ['健康', '关注', '告警'], datasets: [{ label: '请求数', data: [derived.statusCounts.green, derived.statusCounts.yellow, derived.statusCounts.red], backgroundColor: ['#4dbb7a', '#f0c24b', '#e45d6e'], borderRadius: 10 }] }, options: chartOptions({ plugins: { legend: { display: false } } }) });
+      if (has('minorTopBar')) {
+        const fullMinorLabels = derived.topMinor.map(i => i.label);
+        charts.minorTopBar = new Chart($('minorTopBar'), {
+          type: 'bar',
+          data: {
+            labels: fullMinorLabels.map(i => shortLabel(i, 9)),
+            datasets: [{ label: '请求数', data: derived.topMinor.map(i => i.count), backgroundColor: '#89d0ff', borderRadius: 10 }],
+          },
+          options: chartOptions({
+            indexAxis: 'y',
+            scales: { x: { beginAtZero: true }, y: { ticks: { color: '#55647f', font: { size: 11 } }, grid: { color: 'rgba(86,112,159,.10)' } } },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: (items) => fullMinorLabels[items?.[0]?.dataIndex ?? 0] || '',
+                },
+              },
+            },
+          }),
+        });
+      }
+      if (has('flowTopBar')) {
+        const fullFlowLabels = derived.topFlows.map(i => flowIps(i.label));
+        charts.flowTopBar = new Chart($('flowTopBar'), {
+          type: 'bar',
+          data: {
+            labels: fullFlowLabels.map(i => shortLabel(i, 12)),
+            datasets: [{ label: '请求数', data: derived.topFlows.map(i => i.count), backgroundColor: '#d7b8ff', borderRadius: 10 }],
+          },
+          options: chartOptions({
+            indexAxis: 'y',
+            scales: { x: { beginAtZero: true }, y: { ticks: { color: '#55647f', font: { size: 11 } }, grid: { color: 'rgba(86,112,159,.10)' } } },
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: (items) => fullFlowLabels[items?.[0]?.dataIndex ?? 0] || '',
+                },
+              },
+            },
+          }),
+        });
+      }
+      if (has('hourBar')) charts.hourBar = new Chart($('hourBar'), { type: 'bar', data: { labels: derived.hourTrend.map(i => i.label), datasets: [{ label: '请求数', data: derived.hourTrend.map(i => i.count), backgroundColor: '#67d4b6', borderRadius: 8 }] }, options: chartOptions() });
+      if (has('durationLine')) charts.durationLine = new Chart($('durationLine'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 Duration(s)', data: derived.minuteSeries.map(i => i.avgDuration), borderColor: '#ffc56e', backgroundColor: 'rgba(255,197,110,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
+      if (has('ttftTrend')) charts.ttftTrend = new Chart($('ttftTrend'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 TTFT(ms)', data: derived.minuteSeries.map(i => i.avgTtft), borderColor: '#89d0ff', backgroundColor: 'rgba(137,208,255,.18)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
+      if (has('tpotTrend')) charts.tpotTrend = new Chart($('tpotTrend'), { type: 'line', data: { labels: minuteLabels, datasets: [{ label: '平均 TPOT(ms/token)', data: derived.minuteSeries.map(i => i.avgTpot), borderColor: '#d7b8ff', backgroundColor: 'rgba(215,184,255,.20)', fill: true, pointRadius: 2, tension: 0.28 }] }, options: chartOptions() });
+
+      if (has('avgDuration')) $('avgDuration').textContent = num2(derived.avgDuration);
+      if (has('avgTtft')) $('avgTtft').textContent = num1(derived.avgTtft);
+      if (has('avgTpot')) $('avgTpot').textContent = num1(derived.avgTpot);
+      if (has('topMinor')) $('topMinor').textContent = derived.hottestMinor;
+    }
+
+    async function refreshAll() {
+      const qs = queryString();
+      const [statsResp, entriesResp, cfgResp] = await Promise.all([fetch(`/api/stats${qs}`), fetch(`/api/entries${qs}`), fetch('/api/self-hosted')]);
+      const stats = await statsResp.json();
+      const entries = (await entriesResp.json()).items || [];
+      const cfgs = (await cfgResp.json()).items || [];
+
+      if (has('totalEntries')) $('totalEntries').textContent = stats.total_entries ?? 0;
+      if (has('totalInput')) $('totalInput').textContent = compact(stats.total_input_tokens);
+      if (has('totalOutput')) $('totalOutput').textContent = compact(stats.total_output_tokens);
+      if (has('rps')) $('rps').textContent = num1(stats.rps);
+
+      if (has('entryTable')) {
+        document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
+          const statusInfo = classifyStatus(e);
+          return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${statusInfo.cls}" title="${statusInfo.label}"></i></td></tr>`;
+        }).join('');
+      }
+
+      if (has('cfgTable')) {
+        document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
+        if (cfgs.length > 0) {
+          const llmOld = loadCfg('llm_cfg') || {};
+          saveCfg('llm_cfg', { name: cfgs[0].name, target: cfgs[0].server_ip, latency_ms: llmOld.latency_ms || null });
+        } else {
+          clearCfgLocal('llm_cfg');
+        }
+        renderTopology();
+      }
+
+      document.querySelectorAll('[data-del]').forEach(btn => { btn.onclick = async () => { await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' }); await refreshAll(); }; });
+      drawCharts(stats.major_stats || [], stats, entries);
+    }
+
+    async function checkConnectivity(target) {
+      const fd = new FormData();
+      fd.append('target', target);
+      const resp = await fetch('/api/connectivity-check', { method: 'POST', body: fd });
+      return resp.json();
+    }
+
+    function uploadWithProgress(formData) {
+      return new Promise((resolve, reject) => {
+        const progress = $('uploadProgress');
+        const bar = $('uploadProgressBar');
+        const text = $('uploadProgressText');
+        if (!progress || !bar || !text) return reject(new Error('当前页面无上传组件'));
+        progress.hidden = false; bar.style.width = '0%'; text.textContent = '上传中 0%';
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload');
+        xhr.upload.onprogress = (evt) => {
+          if (!evt.lengthComputable) return;
+          const pct = Math.min(99, Math.round((evt.loaded / evt.total) * 100));
+          bar.style.width = `${pct}%`; text.textContent = `上传中 ${pct}%`;
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            bar.style.width = '100%'; text.textContent = '上传完成，正在解析...';
+            try { resolve(JSON.parse(xhr.responseText || '{}')); } catch (e) { reject(e); }
+          } else {
+            reject(new Error(`上传失败: ${xhr.status}`));
+          }
+        };
+        xhr.onerror = () => reject(new Error('网络异常，上传失败'));
+        xhr.send(formData);
+      });
+    }
+
+    if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
+    if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
+    if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
+    if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      const name = String(fd.get('name') || '').trim();
+      const target = String(fd.get('server_ip') || '').trim();
+      let latencyMs = null;
+      if (target.includes(':')) {
+        const t0 = performance.now();
+        const result = await checkConnectivity(target);
+        latencyMs = result.ok ? (performance.now() - t0) : null;
+      }
+      saveCfg('llm_cfg', { name, target, latency_ms: latencyMs });
+      e.target.reset();
+      $('status').textContent = '自建配置已保存。';
+      renderTopology();
+      await refreshAll();
+    };
+    if (has('clearCfg')) $('clearCfg').onclick = async () => { await fetch('/api/self-hosted/clear', { method: 'POST' }); $('status').textContent = '自建配置已清空并重置序号。'; await refreshAll(); };
+    if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
+    if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
+
+    if (has('ragForm')) $('ragForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get('rag_name') || '').trim();
+      const target = String(fd.get('rag_target') || '').trim();
+      const t0 = performance.now();
+      const result = await checkConnectivity(target);
+      const latencyMs = result.ok ? (performance.now() - t0) : null;
+      $('ragStatus').textContent = result.message;
+      if (result.ok) {
+        saveCfg('rag_cfg', { name, target, latency_ms: latencyMs });
+        renderTopology();
+      }
+      $('status').textContent = result.ok ? 'RAG 配置确认成功。' : 'RAG 配置确认失败。';
+    };
+
+    if (has('mcpForm')) $('mcpForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const name = String(fd.get('mcp_name') || '').trim();
+      const target = String(fd.get('mcp_target') || '').trim();
+      const t0 = performance.now();
+      const result = await checkConnectivity(target);
+      const latencyMs = result.ok ? (performance.now() - t0) : null;
+      $('mcpStatus').textContent = result.message;
+      if (result.ok) {
+        saveCfg('mcp_cfg', { name, target, latency_ms: latencyMs });
+        renderTopology();
+      }
+      $('status').textContent = result.ok ? 'MCP 配置确认成功。' : 'MCP 配置确认失败。';
+    };
+
+    if (has('clearRagCfg')) $('clearRagCfg').onclick = () => { clearCfgLocal('rag_cfg'); renderTopology(); $('status').textContent = 'RAG配置已清空。'; };
+    if (has('clearMcpCfg')) $('clearMcpCfg').onclick = () => { clearCfgLocal('mcp_cfg'); renderTopology(); $('status').textContent = 'MCP配置已清空。'; };
+
+    if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const curlRaw = String(fd.get('curl_raw') || '').trim();
+      if (!curlRaw) {
+        $('status').textContent = '请先填写 curl 原文。';
+        if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（未发送）';
+        return;
+      }
+      if (has('probeSendBtn')) { $('probeSendBtn').disabled = true; $('probeSendBtn').textContent = '发送中...'; }
+      if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（发送中）';
+      const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (has('probeResultText')) $('probeResultText').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
+      $('status').textContent = data.ok ? '已发送，拨测完成。' : '已发送，但拨测失败。';
+      if (has('probeResponseHead')) $('probeResponseHead').textContent = data.ok ? '响应结果（已发送 ✓）' : '响应结果（已发送 ×）';
+      if (has('probeSendBtn')) { $('probeSendBtn').disabled = false; $('probeSendBtn').textContent = '发送拨测'; }
+    };
+
+    if (has('probeForm') && has('curlRaw')) {
+      const form = $('probeForm');
+      const raw = $('curlRaw');
+      const syncTemplate = () => {
+        const current = raw.value.trim();
+        if (!current || current === lastAutoCurlTemplate) {
+          lastAutoCurlTemplate = buildCurlTemplateFromFields(form);
+          raw.value = lastAutoCurlTemplate;
+        }
+      };
+      form.querySelectorAll('input[name="target"], input[name="model"], input[name="api_key"]').forEach(el => el.addEventListener('input', syncTemplate));
+      syncTemplate();
+    }
+
+    renderTopology();
+    if (document.body.dataset.page !== 'probe') {
+      refreshAll();
+    }
+  </script>
+</body>
+</html>
