@@ -133,6 +133,11 @@ def records_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "records"})
 
 
+@app.get("/query", response_class=HTMLResponse)
+def query_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "query"})
+
+
 @app.get("/probe", response_class=HTMLResponse)
 def probe_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "probe"})

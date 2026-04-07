@@ -102,6 +102,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .ghost-btn { padding: 11px 15px; font-size: 14px; font-weight: 560; }
 
 .filter-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(180px, .9fr) auto auto; gap: 10px; align-items: end; }
+.query-form { display: grid; grid-template-columns: repeat(4, minmax(180px, 1fr)); gap: 10px; align-items: end; }
 .filter-item { display: grid; gap: 4px; }
 .filter-item span { font-size: 12px; color: #6f7d95; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }
@@ -137,6 +138,10 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .topo-node-llm { right: 8%; top: 71%; }
 .topo-lat { position: absolute; top: -22px; right: 0; font-size: 11px; color: #4f607d; background: rgba(255,255,255,.82); border: 1px solid rgba(86,112,159,.16); padding: 2px 6px; border-radius: 999px; }
 .topo-hidden { display: none; }
+.query-kpis { display: grid; gap: 10px; padding-top: 12px; }
+.query-kpis div { background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); border-radius: 12px; padding: 10px; display: grid; }
+.query-kpis strong { font-size: 26px; color: #2d4778; }
+.query-kpis small { color: #5f6e87; font-size: 12px; }
 table { width: 100%; border-collapse: collapse; border-radius: 16px; overflow: hidden; }
 th, td { border-bottom: 1px solid rgba(86,112,159,.16); padding: 10px; font-size: 12px; text-align: left; }
 th { color: #3f4f69; background: rgba(255,255,255,.56); position: sticky; top: 0; }
