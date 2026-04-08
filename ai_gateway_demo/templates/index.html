@@ -184,6 +184,33 @@
         <p id="mcpStatus" class="subtle"></p>
       </section>
 
+      <section class="glass panel">
+        <h2>健康状态阈值配置</h2>
+        <p class="subtle">基于 TTFT / TPOT 阈值判定健康、关注、告警。</p>
+        <form id="healthCfgForm" class="query-form">
+          <label class="filter-item">
+            <span>TTFT关注阈值(ms)</span>
+            <input id="ttftWarn" type="number" min="0" step="1" />
+          </label>
+          <label class="filter-item">
+            <span>TTFT告警阈值(ms)</span>
+            <input id="ttftAlert" type="number" min="0" step="1" />
+          </label>
+          <label class="filter-item">
+            <span>TPOT关注阈值(ms/token)</span>
+            <input id="tpotWarn" type="number" min="0" step="1" />
+          </label>
+          <label class="filter-item">
+            <span>TPOT告警阈值(ms/token)</span>
+            <input id="tpotAlert" type="number" min="0" step="1" />
+          </label>
+          <div class="actions">
+            <button type="submit">保存阈值</button>
+            <button id="resetHealthCfg" type="button" class="ghost-btn">恢复默认</button>
+          </div>
+        </form>
+      </section>
+
       <section class="glass panel topology-panel">
         <h2>连接拓扑</h2>
         <p class="subtle">配置成功后显示实体、连线与探测时延。</p>
@@ -274,20 +301,42 @@
       </div>
       <form id="detailQueryForm" class="query-form">
         <label class="filter-item">
-          <span>ID</span>
-          <input id="qId" type="number" min="1" placeholder="如 1" />
+          <span>大类</span>
+          <select id="qMajor">
+            <option value="">全部大类</option>
+            <option value="三方AI">三方AI</option>
+            <option value="自建AI">自建AI</option>
+            <option value="实验AI">实验AI</option>
+          </select>
         </label>
         <label class="filter-item">
           <span>小类</span>
           <input id="qMinor" placeholder="如 千问" />
         </label>
         <label class="filter-item">
-          <span>流</span>
-          <input id="qFlow" placeholder="如 10.1.1.1:62081-172.18.94.109:8080" />
-        </label>
-        <label class="filter-item">
           <span>用户IP</span>
           <input id="qUserIp" placeholder="如 10.136.136.222" />
+        </label>
+        <label class="filter-item">
+          <span>用户Port</span>
+          <input id="qUserPort" placeholder="如 62081" />
+        </label>
+        <label class="filter-item">
+          <span>服务IP</span>
+          <input id="qServerIp" placeholder="如 172.18.94.109" />
+        </label>
+        <label class="filter-item">
+          <span>服务Port</span>
+          <input id="qServerPort" placeholder="如 8080" />
+        </label>
+        <label class="filter-item">
+          <span>健康状态</span>
+          <select id="qHealth">
+            <option value="">全部状态</option>
+            <option value="green">健康</option>
+            <option value="yellow">关注</option>
+            <option value="red">告警</option>
+          </select>
         </label>
         <div class="actions">
           <button type="submit">执行查询</button>
@@ -311,6 +360,9 @@
           <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
           <div><strong id="queryAvgTtft">0.0</strong><small>平均TTFT(ms)</small></div>
           <div><strong id="queryAvgDuration">0.0</strong><small>平均Duration(s)</small></div>
+          <div><strong id="queryUserCount">0</strong><small>用户数(按用户IP)</small></div>
+          <div><strong id="queryModelCount">0</strong><small>模型数(按服务IP:Port)</small></div>
+          <div><strong id="queryFlowCount">0</strong><small>流数(按五元组)</small></div>
         </div>
       </section>
     </section>
@@ -321,7 +373,7 @@
         <thead>
           <tr>
             <th>ID</th><th>开始时间(真实)</th><th>相对开始时间(s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
-            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -345,6 +397,12 @@
     function has(id) { return !!$(id); }
     function destroyAllCharts() { Object.values(charts).forEach(c => c?.destroy?.()); }
     function flowIps(flowKey) { if (!flowKey || !flowKey.includes('-')) return '-'; const [a, b] = flowKey.split('-'); return `${a} ↔ ${b}`; }
+    function parseFlow(flowKey) {
+      const [left = '', right = ''] = String(flowKey || '').split('-');
+      const [userIp = '', userPort = ''] = left.split(':');
+      const [serverIp = '', serverPort = ''] = right.split(':');
+      return { userIp, userPort, serverIp, serverPort };
+    }
     function extractUserIp(flowKey) { if (!flowKey || !flowKey.includes('-')) return ''; return String(flowKey.split('-')[0] || '').split(':')[0] || ''; }
     function toServerTime(v) { if (!v) return ''; return v.replace('T', ' ') + ':00'; }
     const loadCfg = (key) => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
@@ -352,6 +410,8 @@
     const clearCfgLocal = (key) => localStorage.removeItem(key);
     const show = (id, visible) => { if (!has(id)) return; $(id).classList.toggle('topo-hidden', !visible); };
     let lastAutoCurlTemplate = '';
+    const DEFAULT_HEALTH_CFG = { ttft_warn: 1800, ttft_alert: 3500, tpot_warn: 90, tpot_alert: 180 };
+    function getHealthCfg() { const cfg = loadCfg('health_cfg') || {}; return { ...DEFAULT_HEALTH_CFG, ...cfg }; }
 
     function renderTopology() {
       if (!has('topoRag')) return;
@@ -397,7 +457,14 @@
     function percentile(values, p) { if (!values.length) return 0; const sorted = [...values].sort((a, b) => a - b); const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1)); return sorted[idx] || 0; }
     function avg(values) { if (!values.length) return 0; return values.reduce((s, v) => s + v, 0) / values.length; }
     function groupBy(items, keyFn) { const map = new Map(); items.forEach(item => { const key = keyFn(item); if (!map.has(key)) map.set(key, []); map.get(key).push(item); }); return map; }
-    function classifyStatus(entry) { const ttft = Number(entry.ttft_ms || 0); const tpot = Number(entry.tpot_ms_per_token || 0); if (ttft >= 3500 || tpot >= 180) return { label: '告警', cls: 'red' }; if (ttft >= 1800 || tpot >= 90) return { label: '关注', cls: 'yellow' }; return { label: '健康', cls: 'green' }; }
+    function classifyStatus(entry) {
+      const cfg = getHealthCfg();
+      const ttft = Number(entry.ttft_ms || 0);
+      const tpot = Number(entry.tpot_ms_per_token || 0);
+      if (ttft >= Number(cfg.ttft_alert) || tpot >= Number(cfg.tpot_alert)) return { label: '告警', cls: 'red' };
+      if (ttft >= Number(cfg.ttft_warn) || tpot >= Number(cfg.tpot_warn)) return { label: '关注', cls: 'yellow' };
+      return { label: '健康', cls: 'green' };
+    }
 
     function chartOptions(extra = {}) {
       return {
@@ -447,15 +514,22 @@
     }
 
     function applyDetailFilters(entries) {
-      const idVal = has('qId') ? String($('qId').value || '').trim() : '';
+      const majorVal = has('qMajor') ? String($('qMajor').value || '').trim() : '';
       const minorVal = has('qMinor') ? String($('qMinor').value || '').trim().toLowerCase() : '';
-      const flowVal = has('qFlow') ? String($('qFlow').value || '').trim().toLowerCase() : '';
       const userIpVal = has('qUserIp') ? String($('qUserIp').value || '').trim() : '';
+      const userPortVal = has('qUserPort') ? String($('qUserPort').value || '').trim() : '';
+      const serverIpVal = has('qServerIp') ? String($('qServerIp').value || '').trim() : '';
+      const serverPortVal = has('qServerPort') ? String($('qServerPort').value || '').trim() : '';
+      const healthVal = has('qHealth') ? String($('qHealth').value || '').trim() : '';
       return (entries || []).filter((e) => {
-        if (idVal && String(e.id) !== idVal) return false;
+        const f = parseFlow(String(e.flow_key || ''));
+        if (majorVal && String(e.category_major || '') !== majorVal) return false;
         if (minorVal && !String(e.category_minor || '').toLowerCase().includes(minorVal)) return false;
-        if (flowVal && !String(e.flow_key || '').toLowerCase().includes(flowVal)) return false;
-        if (userIpVal && extractUserIp(String(e.flow_key || '')) !== userIpVal) return false;
+        if (userIpVal && f.userIp !== userIpVal) return false;
+        if (userPortVal && f.userPort !== userPortVal) return false;
+        if (serverIpVal && f.serverIp !== serverIpVal) return false;
+        if (serverPortVal && f.serverPort !== serverPortVal) return false;
+        if (healthVal && classifyStatus(e).cls !== healthVal) return false;
         return true;
       });
     }
@@ -470,10 +544,16 @@
         avgTtft: avg(items.map(i => Number(i.ttft_ms || 0))),
       }));
 
-      document.querySelector('#queryTable tbody').innerHTML = rows.map(e => `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td></tr>`).join('');
+      document.querySelector('#queryTable tbody').innerHTML = rows.map(e => {
+        const s = classifyStatus(e);
+        return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${s.cls}" title="${s.label}"></i></td></tr>`;
+      }).join('');
       if (has('queryHitCount')) $('queryHitCount').textContent = String(rows.length);
       if (has('queryAvgTtft')) $('queryAvgTtft').textContent = num1(avg(rows.map(r => Number(r.ttft_ms || 0))));
       if (has('queryAvgDuration')) $('queryAvgDuration').textContent = num1(avg(rows.map(r => Number(r.latency_ms || 0) / 1000)));
+      if (has('queryUserCount')) $('queryUserCount').textContent = String(new Set(rows.map(r => parseFlow(r.flow_key).userIp).filter(Boolean)).size);
+      if (has('queryModelCount')) $('queryModelCount').textContent = String(new Set(rows.map(r => { const f = parseFlow(r.flow_key); return `${f.serverIp}:${f.serverPort}`; }).filter(v => v !== ':')).size);
+      if (has('queryFlowCount')) $('queryFlowCount').textContent = String(new Set(rows.map(r => `TCP|${r.flow_key}`)).size);
 
       if (has('queryCountLine')) {
         charts.queryCountLine?.destroy?.();
@@ -724,8 +804,31 @@
         drawDetailQuery(allRows);
       };
       $('detailQueryForm').onsubmit = async (e) => { e.preventDefault(); await queryRun(); };
-      if (has('resetDetailQuery')) $('resetDetailQuery').onclick = async () => { $('qId').value = ''; $('qMinor').value = ''; $('qFlow').value = ''; $('qUserIp').value = ''; await queryRun(); };
+      if (has('resetDetailQuery')) $('resetDetailQuery').onclick = async () => { $('qMajor').value = ''; $('qMinor').value = ''; $('qUserIp').value = ''; $('qUserPort').value = ''; $('qServerIp').value = ''; $('qServerPort').value = ''; $('qHealth').value = ''; await queryRun(); };
       queryRun();
+    }
+
+    if (has('healthCfgForm')) {
+      const fillHealth = () => {
+        const cfg = getHealthCfg();
+        $('ttftWarn').value = cfg.ttft_warn;
+        $('ttftAlert').value = cfg.ttft_alert;
+        $('tpotWarn').value = cfg.tpot_warn;
+        $('tpotAlert').value = cfg.tpot_alert;
+      };
+      fillHealth();
+      $('healthCfgForm').onsubmit = (e) => {
+        e.preventDefault();
+        const cfg = {
+          ttft_warn: Number($('ttftWarn').value || DEFAULT_HEALTH_CFG.ttft_warn),
+          ttft_alert: Number($('ttftAlert').value || DEFAULT_HEALTH_CFG.ttft_alert),
+          tpot_warn: Number($('tpotWarn').value || DEFAULT_HEALTH_CFG.tpot_warn),
+          tpot_alert: Number($('tpotAlert').value || DEFAULT_HEALTH_CFG.tpot_alert),
+        };
+        saveCfg('health_cfg', cfg);
+        $('status').textContent = '健康状态阈值已保存。';
+      };
+      if (has('resetHealthCfg')) $('resetHealthCfg').onclick = () => { saveCfg('health_cfg', DEFAULT_HEALTH_CFG); fillHealth(); $('status').textContent = '健康状态阈值已恢复默认。'; };
     }
 
     renderTopology();
