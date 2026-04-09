@@ -69,6 +69,9 @@ body {
 .chart-panel-pie canvas { height: 300px !important; max-height: 300px !important; }
 
 .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+#upload { order: 1; }
+#healthCfgPanel { order: 2; }
+#selfHostedPanel { order: 3; }
 .panel-content-gap { margin-top: 14px; }
 
 .config-title { margin: 18px 0 10px; font-size: 17px; color: #2f4a7a; }
@@ -139,6 +142,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .topo-lat { position: absolute; top: -22px; right: 0; font-size: 11px; color: #4f607d; background: rgba(255,255,255,.82); border: 1px solid rgba(86,112,159,.16); padding: 2px 6px; border-radius: 999px; }
 .topo-hidden { display: none; }
 .query-kpis { display: grid; gap: 10px; padding-top: 12px; }
+.query-kpis-2col { grid-template-columns: 1fr 1fr; }
 .query-kpis div { background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); border-radius: 12px; padding: 10px; display: grid; }
 .query-kpis strong { font-size: 26px; color: #2d4778; }
 .query-kpis small { color: #5f6e87; font-size: 12px; }
