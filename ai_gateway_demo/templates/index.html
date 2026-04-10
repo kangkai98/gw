@@ -198,31 +198,6 @@
         </form>
       </section>
 
-      <section class="glass panel topology-panel">
-        <h2>连接拓扑</h2>
-        <p class="subtle">配置成功后显示实体、连线与探测时延。</p>
-        <div class="topology-graph topology-graph-fancy">
-          <div class="topo-node topo-node-gw">
-            <strong>网关</strong>
-            <small>当前服务</small>
-          </div>
-          <div id="lineGwRag" class="topo-link topo-link-rag topo-hidden"><span id="latGwRag" class="topo-lat">-</span></div>
-          <div id="lineGwMcp" class="topo-link topo-link-mcp topo-hidden"><span id="latGwMcp" class="topo-lat">-</span></div>
-          <div id="lineGwLlm" class="topo-link topo-link-llm topo-hidden"><span id="latGwLlm" class="topo-lat">-</span></div>
-          <div id="nodeRag" class="topo-node topo-node-rag topo-hidden">
-            <strong>RAG</strong>
-            <small id="topoRag">未配置</small>
-          </div>
-          <div id="nodeMcp" class="topo-node topo-node-mcp topo-hidden">
-            <strong>MCP</strong>
-            <small id="topoMcp">未配置</small>
-          </div>
-          <div id="nodeLlm" class="topo-node topo-node-llm topo-hidden">
-            <strong>LLM</strong>
-            <small id="topoLlm">未配置</small>
-          </div>
-        </div>
-      </section>
     </section>
     {% endif %}
 
@@ -266,14 +241,6 @@
       </div>
       <form id="detailQueryForm" class="query-form">
         <label class="filter-item">
-          <span>开始时间</span>
-          <input id="qStartReal" type="datetime-local" />
-        </label>
-        <label class="filter-item">
-          <span>结束时间</span>
-          <input id="qEndReal" type="datetime-local" />
-        </label>
-        <label class="filter-item">
           <span>大类</span>
           <select id="qMajor">
             <option value="">全部大类</option>
@@ -300,6 +267,16 @@
           </select>
         </label>
         <div class="actions"><button type="submit">执行查询</button><button id="resetDetailQuery" type="button" class="ghost-btn">重置</button></div>
+        <div class="query-time-row">
+          <label class="filter-item">
+            <span>开始时间</span>
+            <input id="qStartReal" class="time-input" type="datetime-local" />
+          </label>
+          <label class="filter-item">
+            <span>结束时间</span>
+            <input id="qEndReal" class="time-input" type="datetime-local" />
+          </label>
+        </div>
       </form>
     </section>
     <section class="grid-three charts-gap">
@@ -498,7 +475,7 @@
     }
 
     function drawDetailQuery(entries) {
-      if (!has('queryTable')) return;
+      if (!has('entryTable')) return;
       const rows = applyDetailFilters(entries);
       const topModels = Array.from(groupBy(rows, e => e.category_minor || '未知').entries()).map(([model, list]) => ({ model, count: list.length })).sort((a, b) => b.count - a.count).slice(0, 5).map(i => i.model);
       const bucketOf = (real) => String(real || '').slice(0, 19); // finer than minute
@@ -531,7 +508,7 @@
         };
       });
 
-      document.querySelector('#queryTable tbody').innerHTML = rows.map(e => {
+      document.querySelector('#entryTable tbody').innerHTML = rows.map(e => {
         const s = classifyStatus(e);
         return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${s.cls}" title="${s.label}"></i></td></tr>`;
       }).join('');
@@ -802,7 +779,7 @@
     }
 
     renderTopology();
-    if (document.body.dataset.page !== 'probe') {
+    if (['home', 'config'].includes(document.body.dataset.page || '')) {
       refreshAll();
     }
   </script>
