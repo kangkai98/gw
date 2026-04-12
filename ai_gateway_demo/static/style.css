@@ -107,8 +107,8 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 
 .filter-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(180px, .9fr) auto auto; gap: 10px; align-items: end; }
 .query-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; }
-.query-time-row { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.52); border: 1px solid rgba(86,112,159,.12); }
-.time-input { background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(241,247,255,.90)); border-color: rgba(84,118,177,.25); }
+.query-charts-stack { display: grid; gap: 12px; margin-bottom: 14px; }
+.chart-panel-compact { min-height: 220px; }
 .filter-item { display: grid; gap: 4px; }
 .filter-item span { font-size: 12px; color: #6f7d95; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }

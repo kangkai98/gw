@@ -241,6 +241,14 @@
       </div>
       <form id="detailQueryForm" class="query-form">
         <label class="filter-item">
+          <span>开始时间</span>
+          <input id="qStartReal" type="datetime-local" />
+        </label>
+        <label class="filter-item">
+          <span>结束时间</span>
+          <input id="qEndReal" type="datetime-local" />
+        </label>
+        <label class="filter-item">
           <span>大类</span>
           <select id="qMajor">
             <option value="">全部大类</option>
@@ -267,22 +275,12 @@
           </select>
         </label>
         <div class="actions"><button type="submit">执行查询</button><button id="resetDetailQuery" type="button" class="ghost-btn">重置</button></div>
-        <div class="query-time-row">
-          <label class="filter-item">
-            <span>开始时间</span>
-            <input id="qStartReal" class="time-input" type="datetime-local" />
-          </label>
-          <label class="filter-item">
-            <span>结束时间</span>
-            <input id="qEndReal" class="time-input" type="datetime-local" />
-          </label>
-        </div>
       </form>
     </section>
-    <section class="grid-three charts-gap">
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP5热度模型多线</span></div><canvas id="queryCountLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">TOP5热度模型多线</span></div><canvas id="queryTtftLine"></canvas></section>
-      <section class="glass panel chart-panel">
+    <section class="query-charts-stack">
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型多线（秒级）</span></div><canvas id="queryCountLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">TOP3热度模型多线（秒级）</span></div><canvas id="queryTtftLine"></canvas></section>
+      <section class="glass panel chart-panel chart-panel-compact">
         <div class="panel-head"><h2>命中统计</h2><span class="subtle">双列展示</span></div>
         <div class="query-kpis query-kpis-2col">
           <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
@@ -477,7 +475,7 @@
     function drawDetailQuery(entries) {
       if (!has('entryTable')) return;
       const rows = applyDetailFilters(entries);
-      const topModels = Array.from(groupBy(rows, e => e.category_minor || '未知').entries()).map(([model, list]) => ({ model, count: list.length })).sort((a, b) => b.count - a.count).slice(0, 5).map(i => i.model);
+      const topModels = Array.from(groupBy(rows, e => e.category_minor || '未知').entries()).map(([model, list]) => ({ model, count: list.length })).sort((a, b) => b.count - a.count).slice(0, 3).map(i => i.model);
       const bucketOf = (real) => String(real || '').slice(0, 19); // finer than minute
       const labels = Array.from(new Set(rows.map(r => bucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
       const modelRows = new Map(topModels.map(m => [m, rows.filter(r => (r.category_minor || '未知') === m)]));
