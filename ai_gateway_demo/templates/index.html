@@ -237,17 +237,9 @@
     <section class="glass panel">
       <div class="panel-head">
         <h2>查询条件</h2>
-        <span class="subtle">支持大类/模型/四元组/健康状态/起止时间组合筛选。</span>
+        <span class="subtle">支持大类/模型/四元组/健康状态组合筛选。</span>
       </div>
       <form id="detailQueryForm" class="query-form">
-        <label class="filter-item">
-          <span>开始时间</span>
-          <input id="qStartReal" type="datetime-local" />
-        </label>
-        <label class="filter-item">
-          <span>结束时间</span>
-          <input id="qEndReal" type="datetime-local" />
-        </label>
         <label class="filter-item">
           <span>大类</span>
           <select id="qMajor">
@@ -278,8 +270,8 @@
       </form>
     </section>
     <section class="query-charts-stack">
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型多线（秒级）</span></div><canvas id="queryCountLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">TOP3热度模型多线（秒级）</span></div><canvas id="queryTtftLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型按分钟聚合求和</span></div><canvas id="queryCountLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">TOP3热度模型按分钟平均</span></div><canvas id="queryTtftLine"></canvas></section>
       <section class="glass panel chart-panel chart-panel-compact">
         <div class="panel-head"><h2>命中统计</h2><span class="subtle">双列展示</span></div>
         <div class="query-kpis query-kpis-2col">
@@ -324,8 +316,6 @@
     const num3 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(3));
     const num6 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(6));
     const compact = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v)));
-    const MAX_QUERY_ROWS = 5000;
-    const MAX_CHART_POINTS = 240;
 
     function $(id) { return document.getElementById(id); }
     function has(id) { return !!$(id); }
@@ -478,31 +468,35 @@
       if (!has('entryTable')) return;
       const rows = applyDetailFilters(entries);
       const topModels = Array.from(groupBy(rows, e => e.category_minor || '未知').entries()).map(([model, list]) => ({ model, count: list.length })).sort((a, b) => b.count - a.count).slice(0, 3).map(i => i.model);
-      const modelRows = new Map(topModels.map(m => [m, rows.filter(r => (r.category_minor || '未知') === m).sort((a, b) => String(a.start_time_real || '').localeCompare(String(b.start_time_real || '')))]));
-      const bins = Math.max(1, Math.min(MAX_CHART_POINTS, rows.length || 1));
-      const labels = Array.from({ length: bins }, (_, i) => `T${i + 1}`);
-      const makeSeries = (items, valFn, mode) => {
-        if (!items.length) return Array.from({ length: bins }, () => null);
-        const out = [];
-        for (let i = 0; i < bins; i += 1) {
-          const from = Math.floor((i * items.length) / bins);
-          const to = Math.floor(((i + 1) * items.length) / bins);
-          const slice = items.slice(from, Math.max(from + 1, to));
-          if (!slice.length) { out.push(null); continue; }
-          if (mode === 'count') out.push(slice.length);
-          if (mode === 'last') out.push(valFn(slice[slice.length - 1]));
-        }
-        return out;
-      };
-      const countDatasets = topModels.map((m, idx) => ({ label: m, data: makeSeries(modelRows.get(m) || [], () => 0, 'count'), borderColor: palette[idx % palette.length], backgroundColor: 'transparent', tension: 0.24, pointRadius: 1.5 }));
-      const ttftDatasets = topModels.map((m, idx) => ({ label: m, data: makeSeries(modelRows.get(m) || [], (x) => Number(x.ttft_ms || 0), 'last'), borderColor: palette[idx % palette.length], backgroundColor: 'transparent', tension: 0.24, pointRadius: 1.5, spanGaps: true }));
+      const bucketOf = (real) => String(real || '').slice(0, 16); // minute bucket
+      const labelsRaw = Array.from(new Set(rows.map(r => bucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+      const labelStep = labelsRaw.length > 240 ? Math.ceil(labelsRaw.length / 24) : 10;
+      const displayLabel = (lb, idx) => (idx % labelStep === 0 ? lb : '');
+      const modelRows = new Map(topModels.map(m => [m, rows.filter(r => (r.category_minor || '未知') === m)]));
+      const countDatasets = topModels.map((m, idx) => {
+        const map = groupBy(modelRows.get(m) || [], r => bucketOf(r.start_time_real));
+        return { label: m, data: labelsRaw.map(lb => (map.get(lb) || []).length), borderColor: palette[idx % palette.length], backgroundColor: 'transparent', tension: 0.24, pointRadius: 1.5 };
+      });
+      const ttftDatasets = topModels.map((m, idx) => {
+        const map = groupBy(modelRows.get(m) || [], r => bucketOf(r.start_time_real));
+        return {
+          label: m,
+          data: labelsRaw.map(lb => {
+            const arr = (map.get(lb) || []).map(x => Number(x.ttft_ms || 0));
+            return arr.length ? avg(arr) : null;
+          }),
+          borderColor: palette[idx % palette.length],
+          backgroundColor: 'transparent',
+          tension: 0.24,
+          pointRadius: 1.5,
+          spanGaps: true,
+        };
+      });
 
-      const tableRows = rows.slice(0, MAX_QUERY_ROWS);
-      document.querySelector('#entryTable tbody').innerHTML = tableRows.map(e => {
+      document.querySelector('#entryTable tbody').innerHTML = rows.map(e => {
         const s = classifyStatus(e);
         return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${s.cls}" title="${s.label}"></i></td></tr>`;
       }).join('');
-      if (rows.length > MAX_QUERY_ROWS) $('status').textContent = `查询命中 ${rows.length} 条，当前仅渲染前 ${MAX_QUERY_ROWS} 条，避免内存过高。`;
       if (has('queryHitCount')) $('queryHitCount').textContent = String(rows.length);
       if (has('queryAvgTtft')) $('queryAvgTtft').textContent = num1(avg(rows.map(r => Number(r.ttft_ms || 0))));
       if (has('queryAvgDuration')) $('queryAvgDuration').textContent = num1(avg(rows.map(r => Number(r.latency_ms || 0) / 1000)));
@@ -514,7 +508,7 @@
         charts.queryCountLine?.destroy?.();
         charts.queryCountLine = new Chart($('queryCountLine'), {
           type: 'line',
-          data: { labels, datasets: countDatasets },
+          data: { labels: labelsRaw.map(displayLabel), datasets: countDatasets },
           options: chartOptions({ scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } }),
         });
       }
@@ -522,7 +516,7 @@
         charts.queryTtftLine?.destroy?.();
         charts.queryTtftLine = new Chart($('queryTtftLine'), {
           type: 'line',
-          data: { labels, datasets: ttftDatasets },
+          data: { labels: labelsRaw.map(displayLabel), datasets: ttftDatasets },
           options: chartOptions(),
         });
       }
@@ -738,8 +732,6 @@
     if (has('detailQueryForm')) {
       const queryRun = async () => {
         const q = new URLSearchParams();
-        if (has('qStartReal') && $('qStartReal').value) q.set('start_real', toServerTime($('qStartReal').value));
-        if (has('qEndReal') && $('qEndReal').value) q.set('end_real', toServerTime($('qEndReal').value));
         if (has('qMajor') && $('qMajor').value) q.set('category_major', $('qMajor').value);
         if (has('qMinor') && $('qMinor').value) q.set('category_minor', $('qMinor').value);
         const qs = q.toString();
@@ -748,7 +740,7 @@
         drawDetailQuery(allRows);
       };
       $('detailQueryForm').onsubmit = async (e) => { e.preventDefault(); await queryRun(); };
-      if (has('resetDetailQuery')) $('resetDetailQuery').onclick = async () => { $('qStartReal').value = ''; $('qEndReal').value = ''; $('qMajor').value = ''; $('qMinor').value = ''; $('qUserIp').value = ''; $('qUserPort').value = ''; $('qServerIp').value = ''; $('qServerPort').value = ''; $('qHealth').value = ''; await queryRun(); };
+      if (has('resetDetailQuery')) $('resetDetailQuery').onclick = async () => { $('qMajor').value = ''; $('qMinor').value = ''; $('qUserIp').value = ''; $('qUserPort').value = ''; $('qServerIp').value = ''; $('qServerPort').value = ''; $('qHealth').value = ''; await queryRun(); };
       queryRun();
     }
 
