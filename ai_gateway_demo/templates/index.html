@@ -271,7 +271,8 @@
     </section>
     <section class="query-charts-stack">
       <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型按分钟聚合求和</span></div><canvas id="queryCountLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">TOP3热度模型按分钟平均</span></div><canvas id="queryTtftLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">按秒聚合TTFT，仅标记实际有AI流的点</span></div><canvas id="queryTtftLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>模型请求量 Top10</h2><span class="subtle">按请求次数降序</span></div><canvas id="queryTopModelBar"></canvas></section>
       <section class="glass panel chart-panel chart-panel-compact">
         <div class="panel-head"><h2>命中统计</h2><span class="subtle">双列展示</span></div>
         <div class="query-kpis query-kpis-2col">
@@ -467,8 +468,12 @@
     function drawDetailQuery(entries) {
       if (!has('entryTable')) return;
       const rows = applyDetailFilters(entries);
-      const topModels = Array.from(groupBy(rows, e => e.category_minor || '未知').entries()).map(([model, list]) => ({ model, count: list.length })).sort((a, b) => b.count - a.count).slice(0, 3).map(i => i.model);
+      const modelRankings = Array.from(groupBy(rows, e => e.category_minor || '未知').entries())
+        .map(([model, list]) => ({ model, count: list.length }))
+        .sort((a, b) => b.count - a.count);
+      const topModels = modelRankings.slice(0, 3).map(i => i.model);
       const bucketOf = (real) => String(real || '').slice(0, 16); // minute bucket
+      const secBucketOf = (real) => String(real || '').slice(0, 19); // second bucket
       const labelsRaw = Array.from(new Set(rows.map(r => bucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
       const labelStep = labelsRaw.length > 240 ? Math.ceil(labelsRaw.length / 24) : 10;
       const displayLabel = (lb, idx) => (idx % labelStep === 0 ? lb : '');
@@ -478,18 +483,21 @@
         return { label: m, data: labelsRaw.map(lb => (map.get(lb) || []).length), borderColor: palette[idx % palette.length], backgroundColor: 'transparent', tension: 0.24, pointRadius: 1.5 };
       });
       const ttftDatasets = topModels.map((m, idx) => {
-        const map = groupBy(modelRows.get(m) || [], r => bucketOf(r.start_time_real));
+        const aiRows = (modelRows.get(m) || []).filter(r => Number(r.ttft_ms || 0) > 0);
+        const map = groupBy(aiRows, r => secBucketOf(r.start_time_real));
+        const secLabels = Array.from(new Set(aiRows.map(r => secBucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
         return {
           label: m,
-          data: labelsRaw.map(lb => {
-            const arr = (map.get(lb) || []).map(x => Number(x.ttft_ms || 0));
-            return arr.length ? avg(arr) : null;
-          }),
+          data: secLabels.map(lb => {
+            const arr = (map.get(lb) || []).map(x => Number(x.ttft_ms || 0)).filter(v => v > 0);
+            return { x: lb, y: arr.length ? avg(arr) : null };
+          }).filter(p => p.y !== null),
           borderColor: palette[idx % palette.length],
           backgroundColor: 'transparent',
           tension: 0.24,
-          pointRadius: 1.5,
-          spanGaps: true,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+          spanGaps: false,
         };
       });
 
@@ -516,8 +524,37 @@
         charts.queryTtftLine?.destroy?.();
         charts.queryTtftLine = new Chart($('queryTtftLine'), {
           type: 'line',
-          data: { labels: labelsRaw.map(displayLabel), datasets: ttftDatasets },
-          options: chartOptions(),
+          data: { datasets: ttftDatasets },
+          options: chartOptions({
+            scales: {
+              x: {
+                type: 'category',
+                ticks: { color: '#55647f', maxRotation: 0, autoSkip: true, maxTicksLimit: 10 },
+                grid: { color: 'rgba(86,112,159,.10)' },
+              },
+            },
+          }),
+        });
+      }
+      if (has('queryTopModelBar')) {
+        charts.queryTopModelBar?.destroy?.();
+        const top10 = modelRankings.slice(0, 10);
+        charts.queryTopModelBar = new Chart($('queryTopModelBar'), {
+          type: 'bar',
+          data: {
+            labels: top10.map(i => shortLabel(i.model, 16)),
+            datasets: [{ label: '请求数', data: top10.map(i => i.count), backgroundColor: '#7aa2ff', borderRadius: 8 }],
+          },
+          options: chartOptions({
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  title: (items) => top10[items?.[0]?.dataIndex ?? 0]?.model || '',
+                },
+              },
+            },
+            scales: { y: { beginAtZero: true, ticks: { precision: 0 } } },
+          }),
         });
       }
     }
