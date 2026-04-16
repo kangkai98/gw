@@ -271,7 +271,7 @@
     </section>
     <section class="query-charts-stack">
       <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型按分钟聚合求和</span></div><canvas id="queryCountLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">按秒聚合TTFT，仅标记实际有AI流的点</span></div><canvas id="queryTtftLine"></canvas></section>
+      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">按秒聚合TTFT曲线（仅统计实际AI流）</span></div><canvas id="queryTtftLine"></canvas></section>
       <section class="glass panel chart-panel"><div class="panel-head"><h2>模型请求量 Top10</h2><span class="subtle">按请求次数降序</span></div><canvas id="queryTopModelBar"></canvas></section>
       <section class="glass panel chart-panel chart-panel-compact">
         <div class="panel-head"><h2>命中统计</h2><span class="subtle">双列展示</span></div>
@@ -482,22 +482,22 @@
         const map = groupBy(modelRows.get(m) || [], r => bucketOf(r.start_time_real));
         return { label: m, data: labelsRaw.map(lb => (map.get(lb) || []).length), borderColor: palette[idx % palette.length], backgroundColor: 'transparent', tension: 0.24, pointRadius: 1.5 };
       });
+      const aiRowsByModel = new Map(topModels.map(m => [m, (modelRows.get(m) || []).filter(r => Number(r.ttft_ms || 0) > 0)]));
+      const ttftSecLabels = Array.from(new Set(Array.from(aiRowsByModel.values()).flat().map(r => secBucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
       const ttftDatasets = topModels.map((m, idx) => {
-        const aiRows = (modelRows.get(m) || []).filter(r => Number(r.ttft_ms || 0) > 0);
-        const map = groupBy(aiRows, r => secBucketOf(r.start_time_real));
-        const secLabels = Array.from(new Set(aiRows.map(r => secBucketOf(r.start_time_real)).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+        const map = groupBy(aiRowsByModel.get(m) || [], r => secBucketOf(r.start_time_real));
         return {
           label: m,
-          data: secLabels.map(lb => {
+          data: ttftSecLabels.map(lb => {
             const arr = (map.get(lb) || []).map(x => Number(x.ttft_ms || 0)).filter(v => v > 0);
-            return { x: lb, y: arr.length ? avg(arr) : null };
-          }).filter(p => p.y !== null),
+            return arr.length ? avg(arr) : null;
+          }),
           borderColor: palette[idx % palette.length],
           backgroundColor: 'transparent',
-          tension: 0.24,
-          pointRadius: 2,
+          tension: 0.32,
+          pointRadius: 0,
           pointHoverRadius: 4,
-          spanGaps: false,
+          spanGaps: true,
         };
       });
 
@@ -524,11 +524,10 @@
         charts.queryTtftLine?.destroy?.();
         charts.queryTtftLine = new Chart($('queryTtftLine'), {
           type: 'line',
-          data: { datasets: ttftDatasets },
+          data: { labels: ttftSecLabels, datasets: ttftDatasets },
           options: chartOptions({
             scales: {
               x: {
-                type: 'category',
                 ticks: { color: '#55647f', maxRotation: 0, autoSkip: true, maxTicksLimit: 10 },
                 grid: { color: 'rgba(86,112,159,.10)' },
               },
