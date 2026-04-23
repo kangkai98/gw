@@ -297,22 +297,12 @@ def _collect_sni(flow_packets: list[PacketMeta]) -> str | None:
 
 
 def classify_flow(flow_packets: list[PacketMeta], client_ip: str, server_ip: str, server_endpoint: str, self_hosted_configs: list[dict]) -> tuple[str, str]:
-    endpoint_port = 0
-    if ":" in (server_endpoint or ""):
-        try:
-            endpoint_port = int(str(server_endpoint).rsplit(":", 1)[1])
-        except ValueError:
-            endpoint_port = 0
     for cfg in self_hosted_configs:
         target = (cfg.get("server_ip") or "").strip()
         if not target:
             continue
         target_ip = target.split(":", 1)[0].strip()
-        try:
-            target_port = int(cfg.get("server_port") or 0)
-        except (TypeError, ValueError):
-            target_port = 0
-        if target_ip == server_ip and (target_port == 0 or endpoint_port == 0 or target_port == endpoint_port):
+        if target_ip == server_ip:
             return "自建AI", cfg.get("name") or target
 
     sni_text = "\n".join((pkt.sni or "") for pkt in flow_packets if pkt.sni)
