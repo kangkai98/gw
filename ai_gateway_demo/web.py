@@ -22,6 +22,7 @@ from .db import (
     insert_entry,
     list_entries,
     list_self_hosted,
+    refresh_entry_categories_by_self_hosted,
 )
 from .parser import parse_pcap_to_entries
 
@@ -101,21 +102,24 @@ def api_self_hosted_list():
 
 
 @app.post("/api/self-hosted")
-def api_self_hosted_add(name: str = Form(...), server_ip: str = Form(...)):
-    add_self_hosted(name=name, server_ip=server_ip)
-    return {"ok": True}
+def api_self_hosted_add(name: str = Form(...), server_ip: str = Form(...), server_port: int = Form(...)):
+    add_self_hosted(name=name, server_ip=server_ip, server_port=server_port)
+    updated = refresh_entry_categories_by_self_hosted()
+    return {"ok": True, "updated_entries": updated}
 
 
 @app.delete("/api/self-hosted/{service_id}")
 def api_self_hosted_delete(service_id: int):
     delete_self_hosted(service_id)
-    return {"ok": True}
+    updated = refresh_entry_categories_by_self_hosted()
+    return {"ok": True, "updated_entries": updated}
 
 
 @app.post("/api/self-hosted/clear")
 def api_self_hosted_clear():
     clear_self_hosted()
-    return {"ok": True}
+    updated = refresh_entry_categories_by_self_hosted()
+    return {"ok": True, "updated_entries": updated}
 
 
 @app.get("/", response_class=HTMLResponse)

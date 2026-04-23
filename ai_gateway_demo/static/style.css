@@ -112,7 +112,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .filter-item { display: grid; gap: 4px; }
 .filter-item span { font-size: 12px; color: #6f7d95; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }
-.inline-config-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
+.inline-config-form { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .8fr) auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
 .inline-config-form-compact { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto; }
 
 .upload-shell { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
@@ -146,6 +146,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .topo-hidden { display: none; }
 .query-kpis { display: grid; gap: 10px; padding-top: 12px; }
 .query-kpis-2col { grid-template-columns: 1fr 1fr; }
+.query-kpis-row { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .query-kpis div { background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); border-radius: 12px; padding: 10px; display: grid; }
 .query-kpis strong { font-size: 26px; color: #2d4778; }
 .query-kpis small { color: #5f6e87; font-size: 12px; }
@@ -169,10 +170,12 @@ tr:hover td { background: rgba(255,255,255,.55); }
   .cards-8 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .grid-three { grid-template-columns: 1fr 1fr; }
   .filter-form, .inline-config-form, .config-grid { grid-template-columns: 1fr 1fr; }
+  .query-kpis-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 980px) {
   .hero, .cards-8, .grid-three, .filter-form, .inline-config-form, .config-grid { grid-template-columns: 1fr; display: grid; }
   .hero { align-items: start; }
   .hero-note { align-items: flex-start; text-align: left; min-width: 0; }
   .status-legend { justify-content: flex-start; }
+  .query-kpis-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

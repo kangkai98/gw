@@ -60,19 +60,29 @@ def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         _ensure_entry_schema(conn)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS self_hosted_services (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                server_ip TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
+        _ensure_self_hosted_schema(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_self_hosted_schema(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS self_hosted_services (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            server_ip TEXT NOT NULL,
+            server_port INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cols = conn.execute("PRAGMA table_info(self_hosted_services)").fetchall()
+    existing = {row[1] for row in cols}
+    if "server_port" not in existing:
+        conn.execute("ALTER TABLE self_hosted_services ADD COLUMN server_port INTEGER")
+        conn.execute("UPDATE self_hosted_services SET server_port = 443 WHERE server_port IS NULL")
 
 
 def _is_valid_entry_for_store(entry: dict[str, Any]) -> bool:
@@ -242,15 +252,16 @@ def list_self_hosted(db_path: Path = DB_PATH) -> list[dict[str, Any]]:
         conn.close()
 
 
-def add_self_hosted(name: str, server_ip: str, db_path: Path = DB_PATH) -> None:
+def add_self_hosted(name: str, server_ip: str, server_port: int, db_path: Path = DB_PATH) -> None:
     normalized = (server_ip or "").strip()
     if ":" in normalized:
         normalized = normalized.split(":", 1)[0].strip()
+    normalized_port = int(server_port)
     conn = get_conn(db_path)
     try:
         conn.execute(
-            "INSERT INTO self_hosted_services(name, server_ip) VALUES (?, ?)",
-            (name, normalized),
+            "INSERT INTO self_hosted_services(name, server_ip, server_port) VALUES (?, ?, ?)",
+            (name, normalized, normalized_port),
         )
         conn.commit()
     finally:
@@ -274,3 +285,59 @@ def clear_self_hosted(db_path: Path = DB_PATH) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def refresh_entry_categories_by_self_hosted(db_path: Path = DB_PATH) -> int:
+    conn = get_conn(db_path)
+    try:
+        cfgs = conn.execute("SELECT name, server_ip, server_port FROM self_hosted_services").fetchall()
+        entries = conn.execute("SELECT id, flow_key, category_major, category_minor FROM entries").fetchall()
+        updated = 0
+        for row in entries:
+            entry_id = int(row["id"])
+            flow_key = str(row["flow_key"] or "")
+            category_major = str(row["category_major"] or "")
+            category_minor = str(row["category_minor"] or "")
+            _, server_endpoint = _split_flow_key(flow_key)
+            server_ip, server_port = _split_endpoint(server_endpoint)
+            matched = next(
+                (cfg for cfg in cfgs if str(cfg["server_ip"] or "") == server_ip and int(cfg["server_port"] or 0) == server_port),
+                None,
+            )
+            if matched:
+                new_major = "自建AI"
+                new_minor = str(matched["name"] or f"{server_ip}:{server_port}")
+            elif category_major == "自建AI":
+                new_major = "实验AI"
+                new_minor = f"exp-{server_ip}" if server_ip else category_minor
+            else:
+                continue
+
+            if new_major != category_major or new_minor != category_minor:
+                conn.execute(
+                    "UPDATE entries SET category_major = ?, category_minor = ? WHERE id = ?",
+                    (new_major, new_minor, entry_id),
+                )
+                updated += 1
+        conn.commit()
+        return updated
+    finally:
+        conn.close()
+
+
+def _split_flow_key(flow_key: str) -> tuple[str, str]:
+    parts = str(flow_key or "").split("-", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return "", ""
+
+
+def _split_endpoint(endpoint: str) -> tuple[str, int]:
+    raw = str(endpoint or "")
+    if ":" not in raw:
+        return raw.strip(), 0
+    host, port = raw.rsplit(":", 1)
+    try:
+        return host.strip(), int(port.strip())
+    except ValueError:
+        return host.strip(), 0

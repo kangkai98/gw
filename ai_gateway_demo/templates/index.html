@@ -150,11 +150,12 @@
         <form id="cfgForm" class="inline-config-form panel-content-gap">
           <input aria-label="小类名称" name="name" placeholder="名称，如 知识助理" required />
           <input aria-label="服务端 IP" name="server_ip" placeholder="服务端IP，如 192.168.101.1" required />
+          <input aria-label="服务端 Port" name="server_port" type="number" min="1" max="65535" placeholder="服务端端口，如 443" required />
           <button aria-label="保存配置" type="submit">保存</button>
           <button aria-label="清空自建配置" id="clearCfg" type="button" class="warn">清空配置</button>
         </form>
         <table id="cfgTable">
-          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>操作</th></tr></thead>
+          <thead><tr><th>ID</th><th>名称</th><th>服务端IP</th><th>服务端Port</th><th>操作</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -269,21 +270,21 @@
         <div class="actions"><button type="submit">执行查询</button><button id="resetDetailQuery" type="button" class="ghost-btn">重置</button></div>
       </form>
     </section>
+    <section class="glass panel chart-panel chart-panel-compact">
+      <div class="panel-head"><h2>命中统计</h2><span class="subtle">单行展示</span></div>
+      <div class="query-kpis query-kpis-row">
+        <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
+        <div><strong id="queryFlowCount">0</strong><small>流数(五元组)</small></div>
+        <div><strong id="queryUserCount">0</strong><small>用户数</small></div>
+        <div><strong id="queryModelCount">0</strong><small>模型数</small></div>
+        <div><strong id="queryAvgTtft">0.0</strong><small>平均TTFT(ms)</small></div>
+        <div><strong id="queryAvgDuration">0.0</strong><small>平均Duration(s)</small></div>
+      </div>
+    </section>
     <section class="query-charts-stack">
       <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型按分钟聚合求和</span></div><canvas id="queryCountLine"></canvas></section>
       <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">按秒聚合TTFT曲线（仅统计实际AI流）</span></div><canvas id="queryTtftLine"></canvas></section>
       <section class="glass panel chart-panel"><div class="panel-head"><h2>模型请求量 Top10</h2><span class="subtle">按请求次数降序</span></div><canvas id="queryTopModelBar"></canvas></section>
-      <section class="glass panel chart-panel chart-panel-compact">
-        <div class="panel-head"><h2>命中统计</h2><span class="subtle">双列展示</span></div>
-        <div class="query-kpis query-kpis-2col">
-          <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
-          <div><strong id="queryFlowCount">0</strong><small>流数(五元组)</small></div>
-          <div><strong id="queryUserCount">0</strong><small>用户数</small></div>
-          <div><strong id="queryModelCount">0</strong><small>模型数</small></div>
-          <div><strong id="queryAvgTtft">0.0</strong><small>平均TTFT(ms)</small></div>
-          <div><strong id="queryAvgDuration">0.0</strong><small>平均Duration(s)</small></div>
-        </div>
-      </section>
     </section>
     <section class="glass panel" id="records">
       <div class="panel-head">
@@ -641,10 +642,10 @@
       }
 
       if (has('cfgTable')) {
-        document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
+        document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td>${c.server_port}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
         if (cfgs.length > 0) {
           const llmOld = loadCfg('llm_cfg') || {};
-          saveCfg('llm_cfg', { name: cfgs[0].name, target: cfgs[0].server_ip, latency_ms: llmOld.latency_ms || null });
+          saveCfg('llm_cfg', { name: cfgs[0].name, target: `${cfgs[0].server_ip}:${cfgs[0].server_port}`, latency_ms: llmOld.latency_ms || null });
         } else {
           clearCfgLocal('llm_cfg');
         }
@@ -695,22 +696,30 @@
     if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      const resp = await fetch('/api/self-hosted', { method: 'POST', body: fd });
+      const data = await resp.json();
       const name = String(fd.get('name') || '').trim();
-      const target = String(fd.get('server_ip') || '').trim();
+      const targetIp = String(fd.get('server_ip') || '').trim();
+      const targetPort = String(fd.get('server_port') || '').trim();
+      const target = `${targetIp}:${targetPort}`;
       let latencyMs = null;
-      if (target.includes(':')) {
+      if (targetIp && targetPort) {
         const t0 = performance.now();
         const result = await checkConnectivity(target);
         latencyMs = result.ok ? (performance.now() - t0) : null;
       }
       saveCfg('llm_cfg', { name, target, latency_ms: latencyMs });
       e.target.reset();
-      $('status').textContent = '自建配置已保存。';
+      $('status').textContent = `自建配置已保存，已刷新 ${data.updated_entries ?? 0} 条记录分类。`;
       renderTopology();
       await refreshAll();
     };
-    if (has('clearCfg')) $('clearCfg').onclick = async () => { await fetch('/api/self-hosted/clear', { method: 'POST' }); $('status').textContent = '自建配置已清空并重置序号。'; await refreshAll(); };
+    if (has('clearCfg')) $('clearCfg').onclick = async () => {
+      const resp = await fetch('/api/self-hosted/clear', { method: 'POST' });
+      const data = await resp.json();
+      $('status').textContent = `自建配置已清空并重置序号，已刷新 ${data.updated_entries ?? 0} 条记录分类。`;
+      await refreshAll();
+    };
     if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
     if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
 
