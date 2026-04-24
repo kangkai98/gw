@@ -109,11 +109,14 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .query-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; }
 .query-charts-stack { display: grid; gap: 12px; margin-bottom: 14px; }
 .chart-panel-compact { min-height: 220px; }
+.query-kpi-panel { min-height: 150px; }
 .filter-item { display: grid; gap: 4px; }
 .filter-item span { font-size: 12px; color: #6f7d95; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }
 .inline-config-form { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .8fr) auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
 .inline-config-form-compact { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto; }
+#cfgForm { grid-template-columns: minmax(150px, .75fr) minmax(170px, .85fr) minmax(100px, .55fr) auto auto; }
+#cfgForm button { min-width: 104px; white-space: nowrap; }
 
 .upload-shell { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: center; }
 .upload-shell input[type="file"] { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
@@ -150,6 +153,10 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .query-kpis div { background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); border-radius: 12px; padding: 10px; display: grid; }
 .query-kpis strong { font-size: 26px; color: #2d4778; }
 .query-kpis small { color: #5f6e87; font-size: 12px; }
+.query-kpi-panel .query-kpis { padding-top: 2px; gap: 8px; }
+.query-kpi-panel .query-kpis div { padding: 7px 10px; }
+.query-kpi-panel .query-kpis strong { font-size: 20px; line-height: 1.1; }
+.query-kpi-panel .query-kpis small { font-size: 11px; }
 table { width: 100%; border-collapse: collapse; border-radius: 16px; overflow: hidden; }
 th, td { border-bottom: 1px solid rgba(86,112,159,.16); padding: 10px; font-size: 12px; text-align: left; }
 th { color: #3f4f69; background: rgba(255,255,255,.56); position: sticky; top: 0; }

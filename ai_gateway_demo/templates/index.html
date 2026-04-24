@@ -270,7 +270,7 @@
         <div class="actions"><button type="submit">执行查询</button><button id="resetDetailQuery" type="button" class="ghost-btn">重置</button></div>
       </form>
     </section>
-    <section class="glass panel chart-panel chart-panel-compact">
+    <section class="glass panel chart-panel chart-panel-compact query-kpi-panel">
       <div class="panel-head"><h2>命中统计</h2><span class="subtle">单行展示</span></div>
       <div class="query-kpis query-kpis-row">
         <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
@@ -510,7 +510,7 @@
       if (has('queryAvgTtft')) $('queryAvgTtft').textContent = num1(avg(rows.map(r => Number(r.ttft_ms || 0))));
       if (has('queryAvgDuration')) $('queryAvgDuration').textContent = num1(avg(rows.map(r => Number(r.latency_ms || 0) / 1000)));
       if (has('queryUserCount')) $('queryUserCount').textContent = String(new Set(rows.map(r => parseFlow(r.flow_key).userIp).filter(Boolean)).size);
-      if (has('queryModelCount')) $('queryModelCount').textContent = String(new Set(rows.map(r => { const f = parseFlow(r.flow_key); return `${f.serverIp}:${f.serverPort}`; }).filter(v => v !== ':')).size);
+      if (has('queryModelCount')) $('queryModelCount').textContent = String(new Set(rows.map(r => String(r.category_minor || '').trim()).filter(Boolean)).size);
       if (has('queryFlowCount')) $('queryFlowCount').textContent = String(new Set(rows.map(r => `TCP|${r.flow_key}`)).size);
 
       if (has('queryCountLine')) {

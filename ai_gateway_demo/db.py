@@ -41,6 +41,7 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 def _reset_autoincrement(conn: sqlite3.Connection, table: str) -> None:
     if _table_exists(conn, "sqlite_sequence"):
         conn.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
+        conn.execute("INSERT OR REPLACE INTO sqlite_sequence(name, seq) VALUES(?, 0)", (table,))
 
 
 def _ensure_entry_schema(conn: sqlite3.Connection) -> None:
