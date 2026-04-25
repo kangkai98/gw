@@ -203,34 +203,83 @@
     {% endif %}
 
     {% if page == 'probe' %}
-    <section class="glass panel">
-      <h2>拨测</h2>
-      <p class="subtle">填写 URL / 模型名 / API Key 后会自动生成 Curl 模板，也可直接粘贴自定义 Curl。</p>
-      <form id="probeForm" class="probe-form panel-content-gap">
-        <label class="filter-item">
-          <span>服务 URL</span>
-          <input name="target" placeholder="https://api.openai.com/v1 或 http://127.0.0.1:8000/v1" />
-        </label>
-        <label class="filter-item">
-          <span>模型名</span>
-          <input name="model" placeholder="gpt-4o-mini" />
-        </label>
-        <label class="filter-item">
-          <span>API Key</span>
-          <input name="api_key" placeholder="sk-xxxx" />
-        </label>
-        <label class="filter-item probe-full">
-          <span>curl 原文</span>
-          <textarea id="curlRaw" name="curl_raw" rows="7" placeholder="curl -X POST 'http://127.0.0.1:8000/v1/chat/completions' ..."></textarea>
-        </label>
-        <div class="actions probe-full">
-          <button id="probeSendBtn" type="submit">发送拨测</button>
+    <section class="config-grid">
+      <section class="glass panel">
+        <h2>大模型API（OpenAI格式）</h2>
+        <p class="subtle">支持标准与流式拨测。标准返回可用性+Latency，流式额外返回TTFB/TTFT。</p>
+        <form id="llmProbeForm" class="probe-form panel-content-gap">
+          <label class="filter-item">
+            <span>服务URL</span>
+            <input name="target" placeholder="https://api.openai.com/v1 或 http://127.0.0.1:8000/v1" required />
+          </label>
+          <label class="filter-item">
+            <span>模型名</span>
+            <input name="model" placeholder="gpt-4o-mini" required />
+          </label>
+          <label class="filter-item">
+            <span>模式</span>
+            <select name="mode">
+              <option value="standard">标准（non-stream）</option>
+              <option value="stream">流式（stream）</option>
+            </select>
+          </label>
+          <label class="filter-item">
+            <span>API Key</span>
+            <input name="api_key" placeholder="sk-xxxx（可选）" />
+          </label>
+          <label class="filter-item">
+            <span>问题</span>
+            <input name="question" placeholder="你好，做一个20字自我介绍" />
+          </label>
+          <label class="filter-item">
+            <span>超时(秒)</span>
+            <input name="timeout_sec" type="number" min="2" max="90" step="1" value="20" />
+          </label>
+          <div class="actions probe-full"><button id="llmProbeSendBtn" type="submit">发送LLM拨测</button></div>
+        </form>
+        <div id="llmProbeResult" class="probe-response">
+          <div class="probe-response-head">LLM拨测结果</div>
+          <pre id="llmProbeResultText">暂未发送请求。</pre>
         </div>
-        <div id="probeResult" class="probe-response probe-full">
-          <div id="probeResponseHead" class="probe-response-head">响应结果</div>
-          <pre id="probeResultText">暂未发送请求。</pre>
+      </section>
+
+      <section class="glass panel">
+        <h2>MCP端点拨测</h2>
+        <p class="subtle">覆盖核心JSON-RPC方法：initialize、tools/list、resources/list、prompts/list，并支持自定义方法。</p>
+        <form id="mcpProbeForm" class="probe-form panel-content-gap">
+          <label class="filter-item">
+            <span>MCP Endpoint</span>
+            <input name="endpoint" placeholder="http://127.0.0.1:9000/mcp" required />
+          </label>
+          <label class="filter-item">
+            <span>操作</span>
+            <select name="operation" id="mcpProbeOperation">
+              <option value="initialize">initialize</option>
+              <option value="tools_list">tools/list</option>
+              <option value="resources_list">resources/list</option>
+              <option value="prompts_list">prompts/list</option>
+              <option value="custom">自定义方法</option>
+            </select>
+          </label>
+          <label class="filter-item">
+            <span>自定义方法</span>
+            <input name="custom_method" id="mcpCustomMethod" placeholder="例如 sampling/createMessage" disabled />
+          </label>
+          <label class="filter-item">
+            <span>API Key</span>
+            <input name="api_key" placeholder="可选，用于Authorization" />
+          </label>
+          <label class="filter-item">
+            <span>超时(秒)</span>
+            <input name="timeout_sec" type="number" min="1" max="60" step="1" value="10" />
+          </label>
+          <div class="actions probe-full"><button id="mcpProbeSendBtn" type="submit">发送MCP拨测</button></div>
+        </form>
+        <div id="mcpProbeResult" class="probe-response">
+          <div class="probe-response-head">MCP拨测结果</div>
+          <pre id="mcpProbeResultText">暂未发送请求。</pre>
         </div>
-      </form>
+      </section>
     </section>
     {% endif %}
 
@@ -741,38 +790,54 @@
 
     if (has('clearMcpCfg')) $('clearMcpCfg').onclick = () => { clearCfgLocal('mcp_cfg'); renderTopology(); $('status').textContent = 'MCP配置已清空。'; };
 
-    if (has('probeForm')) $('probeForm').onsubmit = async (e) => {
+    if (has('llmProbeForm')) $('llmProbeForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
-      const curlRaw = String(fd.get('curl_raw') || '').trim();
-      if (!curlRaw) {
-        $('status').textContent = '请先填写 curl 原文。';
-        if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（未发送）';
-        return;
-      }
-      if (has('probeSendBtn')) { $('probeSendBtn').disabled = true; $('probeSendBtn').textContent = '发送中...'; }
-      if (has('probeResponseHead')) $('probeResponseHead').textContent = '响应结果（发送中）';
-      const resp = await fetch('/api/probe-curl', { method: 'POST', body: fd });
+      if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
+      const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
       const data = await resp.json();
-      if (has('probeResultText')) $('probeResultText').textContent = data.ok ? (data.response_text || '成功，但未提取到大模型文本响应。') : (data.error_reason || data.stderr || data.message || '请求失败');
-      $('status').textContent = data.ok ? '已发送，拨测完成。' : '已发送，但拨测失败。';
-      if (has('probeResponseHead')) $('probeResponseHead').textContent = data.ok ? '响应结果（已发送 ✓）' : '响应结果（已发送 ×）';
-      if (has('probeSendBtn')) { $('probeSendBtn').disabled = false; $('probeSendBtn').textContent = '发送拨测'; }
+      const lines = [
+        `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
+        `状态码: ${data.status_code ?? '-'}`,
+        `Latency(ms): ${num1(data.latency_ms)}`,
+      ];
+      if ((fd.get('mode') || '') === 'stream') {
+        lines.push(`TTFB(ms): ${num1(data.ttfb_ms)}`);
+        lines.push(`TTFT(ms): ${num1(data.ttft_ms)}`);
+      }
+      lines.push(`消息: ${data.message || '-'}`);
+      if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
+      if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
+      $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
+      if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = false; $('llmProbeSendBtn').textContent = '发送LLM拨测'; }
     };
 
-    if (has('probeForm') && has('curlRaw')) {
-      const form = $('probeForm');
-      const raw = $('curlRaw');
-      const syncTemplate = () => {
-        const current = raw.value.trim();
-        if (!current || current === lastAutoCurlTemplate) {
-          lastAutoCurlTemplate = buildCurlTemplateFromFields(form);
-          raw.value = lastAutoCurlTemplate;
-        }
+    if (has('mcpProbeOperation') && has('mcpCustomMethod')) {
+      $('mcpProbeOperation').onchange = () => {
+        const custom = $('mcpProbeOperation').value === 'custom';
+        $('mcpCustomMethod').disabled = !custom;
       };
-      form.querySelectorAll('input[name="target"], input[name="model"], input[name="api_key"]').forEach(el => el.addEventListener('input', syncTemplate));
-      syncTemplate();
     }
+
+    if (has('mcpProbeForm')) $('mcpProbeForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      if (has('mcpProbeSendBtn')) { $('mcpProbeSendBtn').disabled = true; $('mcpProbeSendBtn').textContent = '拨测中...'; }
+      const resp = await fetch('/api/probe/mcp', { method: 'POST', body: fd });
+      const data = await resp.json();
+      const lines = [
+        `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
+        `操作: ${data.operation || '-'}`,
+        `方法: ${data.method || '-'}`,
+        `状态码: ${data.status_code ?? '-'}`,
+        `Latency(ms): ${num1(data.latency_ms)}`,
+        `消息: ${data.message || '-'}`,
+      ];
+      if (data.result_preview) lines.push(`返回片段: ${data.result_preview}`);
+      if (has('mcpProbeResultText')) $('mcpProbeResultText').textContent = lines.join('\n');
+      $('status').textContent = data.ok ? 'MCP 拨测完成。' : 'MCP 拨测失败。';
+      if (has('mcpProbeSendBtn')) { $('mcpProbeSendBtn').disabled = false; $('mcpProbeSendBtn').textContent = '发送MCP拨测'; }
+    };
 
     if (has('detailQueryForm')) {
       const queryRun = async () => {

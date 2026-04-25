@@ -4,6 +4,9 @@ import socket
 import subprocess
 import json
 import shlex
+import ssl
+import time
+import http.client
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -271,3 +274,211 @@ def api_probe_curl(
         "response_text": response_text,
         "error_reason": error_reason,
     }
+
+
+def _to_chat_completions_url(base_url: str) -> str:
+    raw_target = (base_url or "").strip().rstrip("/")
+    if "/chat/completions" in raw_target:
+        return raw_target
+    if raw_target.endswith("/v1"):
+        return f"{raw_target}/chat/completions"
+    return f"{raw_target}/v1/chat/completions"
+
+
+def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
+    parsed = urlparse(url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("URL 缺少主机地址")
+    port = parsed.port or (443 if scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    if scheme == "https":
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+    start = time.perf_counter()
+    conn.request("POST", path, body=body, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read()
+    latency_ms = (time.perf_counter() - start) * 1000
+    status = int(resp.status or 0)
+    conn.close()
+    return status, raw, latency_ms
+
+
+def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> dict:
+    parsed = urlparse(url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError("URL 缺少主机地址")
+    port = parsed.port or (443 if scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    if scheme == "https":
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
+    else:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+
+    t0 = time.perf_counter()
+    conn.request("POST", path, body=body, headers=headers)
+    resp = conn.getresponse()
+    status = int(resp.status or 0)
+    ttfb_ms: float | None = None
+    ttft_ms: float | None = None
+    collected: list[str] = []
+    try:
+        while True:
+            line = resp.fp.readline(65536)
+            if not line:
+                break
+            now_ms = (time.perf_counter() - t0) * 1000
+            if ttfb_ms is None:
+                ttfb_ms = now_ms
+            text = line.decode("utf-8", errors="ignore").strip()
+            if not text.startswith("data:"):
+                continue
+            payload_text = text[5:].strip()
+            if not payload_text or payload_text == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload_text)
+            except Exception:
+                continue
+            choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+            delta = choice.get("delta") if isinstance(choice, dict) else {}
+            content = ""
+            if isinstance(delta, dict):
+                content = str(delta.get("content") or "")
+            if content:
+                if ttft_ms is None:
+                    ttft_ms = now_ms
+                collected.append(content)
+    finally:
+        conn.close()
+
+    latency_ms = (time.perf_counter() - t0) * 1000
+    return {
+        "status_code": status,
+        "latency_ms": latency_ms,
+        "ttfb_ms": ttfb_ms,
+        "ttft_ms": ttft_ms,
+        "response_text": "".join(collected)[:2000],
+    }
+
+
+@app.post("/api/probe/llm")
+def api_probe_llm(
+    target: str = Form(...),
+    api_key: str = Form(default=""),
+    model: str = Form(default="gpt-4o-mini"),
+    question: str = Form(default="你好"),
+    mode: str = Form(default="standard"),
+    timeout_sec: float = Form(default=20.0),
+):
+    chat_url = _to_chat_completions_url(target)
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    headers = {
+        "Content-Type": "application/json",
+    }
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+
+    stream_mode = mode == "stream"
+    payload = {
+        "model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini",
+        "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
+        "stream": stream_mode,
+    }
+    try:
+        if stream_mode:
+            stream_result = _http_post_stream_probe(chat_url, payload, headers, timeout_value)
+            ok = int(stream_result["status_code"]) < 400
+            return {
+                "ok": ok,
+                "kind": "llm_stream",
+                "availability": "可用" if ok else "不可用",
+                "status_code": stream_result["status_code"],
+                "latency_ms": round(float(stream_result["latency_ms"]), 1),
+                "ttfb_ms": None if stream_result["ttfb_ms"] is None else round(float(stream_result["ttfb_ms"]), 1),
+                "ttft_ms": None if stream_result["ttft_ms"] is None else round(float(stream_result["ttft_ms"]), 1),
+                "response_text": stream_result["response_text"],
+                "chat_url": chat_url,
+                "message": "流式拨测完成" if ok else "流式拨测失败",
+            }
+        status_code, raw, latency_ms = _http_post_json(chat_url, payload, headers, timeout_value)
+        ok = status_code < 400
+        resp_text = raw.decode("utf-8", errors="ignore")
+        short_text = ""
+        try:
+            parsed = json.loads(resp_text)
+            choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+            message = choice.get("message") if isinstance(choice, dict) else {}
+            short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+        except Exception:
+            short_text = resp_text[:2000]
+        return {
+            "ok": ok,
+            "kind": "llm_standard",
+            "availability": "可用" if ok else "不可用",
+            "status_code": status_code,
+            "latency_ms": round(latency_ms, 1),
+            "response_text": short_text,
+            "chat_url": chat_url,
+            "message": "标准拨测完成" if ok else "标准拨测失败",
+        }
+    except Exception as exc:  # pragma: no cover - network dependent
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}"}
+
+
+@app.post("/api/probe/mcp")
+def api_probe_mcp(
+    endpoint: str = Form(...),
+    operation: str = Form(default="initialize"),
+    timeout_sec: float = Form(default=10.0),
+    api_key: str = Form(default=""),
+    custom_method: str = Form(default=""),
+):
+    op_map = {
+        "initialize": ("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ai-gateway-demo", "version": "1.0"}}),
+        "tools_list": ("tools/list", {}),
+        "resources_list": ("resources/list", {}),
+        "prompts_list": ("prompts/list", {}),
+    }
+    if operation == "custom":
+        method = (custom_method or "").strip()
+        params = {}
+    else:
+        method, params = op_map.get(operation, op_map["initialize"])
+    if not method:
+        return {"ok": False, "availability": "不可用", "message": "自定义方法不能为空"}
+    payload = {"jsonrpc": "2.0", "id": "probe-1", "method": method, "params": params}
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    timeout_value = max(1.0, min(float(timeout_sec), 60.0))
+    try:
+        status_code, raw, latency_ms = _http_post_json(endpoint, payload, headers, timeout_value)
+        text = raw.decode("utf-8", errors="ignore")
+        body = json.loads(text) if text.strip().startswith("{") else {"raw": text[:2000]}
+        ok = status_code < 400 and "error" not in body
+        return {
+            "ok": ok,
+            "availability": "可用" if ok else "不可用",
+            "status_code": status_code,
+            "latency_ms": round(latency_ms, 1),
+            "operation": operation,
+            "method": method,
+            "result_preview": json.dumps(body.get("result", body.get("error", body)), ensure_ascii=False)[:2000],
+            "message": "MCP拨测完成" if ok else "MCP拨测失败",
+        }
+    except Exception as exc:  # pragma: no cover - network dependent
+        return {"ok": False, "availability": "不可用", "operation": operation, "method": method, "message": f"MCP拨测异常: {exc}"}
