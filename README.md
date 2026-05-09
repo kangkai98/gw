@@ -9,6 +9,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m ai_gateway_demo --port 8000
+# 可选：启动时自动在线监听（需要 tcpdump 与抓包权限）
+python -m ai_gateway_demo --port 8000 --listen-interface eth0 --listen-interval 60 --listen-filter "tcp"
 ```
 
 打开 `http://127.0.0.1:8000`。
@@ -17,6 +19,7 @@ python -m ai_gateway_demo --port 8000
 
 - 仓库已移除未使用的 `frontend/` 脚手架代码，统一以 `ai_gateway_demo/templates` 页面为准
 - 上传 pcap 并自动分析入库（无需手动 AI IP/阈值）
+- 在线监听网卡流量：可在配置页填写网卡名/BPF过滤表达式，或通过 CLI 参数启动；默认每 60 秒切分一个抓包窗口并自动分析入库
 - 清空历史 request（会重置自增序号）
 - 管理自建 AI 配置（新增/删除/清空，清空会重置序号）
 - 图表展示：
@@ -25,6 +28,15 @@ python -m ai_gateway_demo --port 8000
   - 输入输出 Token（柱状图）
   - Request 数时间变化图（折线图）
 - 支持按开始时间（真实时间）和 AI 大类进行筛选
+
+## 在线监听模式
+
+在线模式依赖本机 `tcpdump`，并且运行进程需要具备抓包权限（例如 Linux 下使用 root、`CAP_NET_RAW`/`CAP_NET_ADMIN`，或提前配置 tcpdump 权限）。
+
+- 页面启动后进入“配置”页，在“在线监听”中填写网卡名（如 `eth0`、`en0`、`any`）、分析周期（默认 `60` 秒）和 BPF 过滤表达式（默认 `tcp`），点击“开始监听”。
+- 服务端会每个周期生成一个 `captures/online_YYYYMMDD_HHMMSS.pcap` 文件，周期结束后立即复用现有解析逻辑入库，页面每 10 秒刷新一次监听状态与最新结果。
+- 也可以通过命令行自动启动：`python -m ai_gateway_demo --listen-interface eth0 --listen-interval 60 --listen-filter "tcp port 443"`。
+- “停止监听”会结束当前 tcpdump 进程，并保留已经生成的窗口文件。
 
 ## 指标说明
 
