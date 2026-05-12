@@ -6,9 +6,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable
 
-from scapy.all import IP, TCP, Raw, rdpcap, wrpcap
+from scapy.all import IP, TCP, Raw, rdpcap
 
 TOKEN_LOG_ENABLE = True
 TOKEN_LOG_PATH = os.path.join("uploads", "token_calc.log")
@@ -54,8 +54,6 @@ class PacketMeta:
     raw: bytes
     wire_len: int
     sni: str | None
-    tcp_flags: int = 0
-    packet: Any | None = None
 
 
 def _append_token_log(line: str) -> None:
@@ -212,22 +210,9 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
                 raw=raw_bytes,
                 wire_len=int(len(p)),
                 sni=_extract_tls_sni(raw_bytes),
-                tcp_flags=int(tcp.flags),
-                packet=p.copy(),
             )
         )
     return sorted(result, key=lambda x: x.ts)
-
-
-def write_packet_metas_to_pcap(pcap_path: Path, packets: Iterable[PacketMeta]) -> None:
-    ordered = sorted((p for p in packets if p.packet is not None), key=lambda x: x.ts)
-    scapy_packets = []
-    for meta in ordered:
-        pkt = meta.packet.copy()
-        pkt.time = meta.ts
-        scapy_packets.append(pkt)
-    pcap_path.parent.mkdir(parents=True, exist_ok=True)
-    wrpcap(str(pcap_path), scapy_packets)
 
 
 def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:

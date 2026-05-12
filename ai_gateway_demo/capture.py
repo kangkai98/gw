@@ -5,22 +5,27 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scapy.all import IP, TCP, rdpcap, wrpcap
+
 from .db import insert_entry, list_self_hosted
-from .parser import (
-    PacketMeta,
-    extract_packets,
-    group_bi_flows,
-    parse_pcap_to_entries,
-    write_packet_metas_to_pcap,
-)
+from .parser import parse_pcap_to_entries
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
+
+
+@dataclass
+class CachedTcpPacket:
+    ts: float
+    flow_key: str
+    tcp_flags: int
+    packet: Any
 
 
 @dataclass
@@ -56,7 +61,7 @@ class OnlineCaptureManager:
     _thread: threading.Thread | None = field(default=None, init=False)
     _proc: subprocess.Popen[bytes] | None = field(default=None, init=False)
     _status: CaptureStatus = field(default_factory=CaptureStatus, init=False)
-    _flow_cache: dict[str, list[PacketMeta]] = field(default_factory=dict, init=False)
+    _flow_cache: dict[str, list[CachedTcpPacket]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -181,10 +186,10 @@ class OnlineCaptureManager:
             self._proc = None
 
     def _analyze_window(self, file_path: Path, idle_timeout_sec: int) -> tuple[int, int, int, Path | None]:
-        packets: list[PacketMeta] = []
+        packets: list[CachedTcpPacket] = []
         if file_path.exists() and file_path.stat().st_size > 0:
-            packets = extract_packets(file_path)
-            for flow_key, flow_packets in group_bi_flows(packets).items():
+            packets = _extract_cached_tcp_packets(file_path)
+            for flow_key, flow_packets in _group_cached_flows(packets).items():
                 cached = self._flow_cache.setdefault(flow_key, [])
                 cached.extend(flow_packets)
                 cached.sort(key=lambda p: p.ts)
@@ -198,7 +203,7 @@ class OnlineCaptureManager:
 
         ready_packets = [pkt for key in ready_keys for pkt in self._flow_cache.get(key, [])]
         analyzed_pcap = self.output_dir / f"ready_{datetime.fromtimestamp(observation_ts).strftime('%Y%m%d_%H%M%S')}.pcap"
-        write_packet_metas_to_pcap(analyzed_pcap, ready_packets)
+        _write_cached_packets_to_pcap(analyzed_pcap, ready_packets)
 
         try:
             configs = list_self_hosted()
@@ -227,6 +232,50 @@ class OnlineCaptureManager:
     def _refresh_cache_status_locked(self) -> None:
         self._status.cached_flows = len(self._flow_cache)
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
+
+
+def _extract_cached_tcp_packets(pcap_path: Path) -> list[CachedTcpPacket]:
+    result: list[CachedTcpPacket] = []
+    for packet in rdpcap(str(pcap_path)):
+        if IP not in packet or TCP not in packet:
+            continue
+        ip = packet[IP]
+        tcp = packet[TCP]
+        result.append(
+            CachedTcpPacket(
+                ts=float(packet.time),
+                flow_key=_canonical_flow_key(str(ip.src), int(tcp.sport), str(ip.dst), int(tcp.dport)),
+                tcp_flags=int(tcp.flags),
+                packet=packet.copy(),
+            )
+        )
+    return sorted(result, key=lambda x: x.ts)
+
+
+def _group_cached_flows(packets: list[CachedTcpPacket]) -> dict[str, list[CachedTcpPacket]]:
+    groups: dict[str, list[CachedTcpPacket]] = defaultdict(list)
+    for packet in packets:
+        groups[packet.flow_key].append(packet)
+    return groups
+
+
+def _canonical_flow_key(src: str, sport: int, dst: str, dport: int) -> str:
+    left = (src, str(sport))
+    right = (dst, str(dport))
+    side1 = f"{left[0]}:{left[1]}"
+    side2 = f"{right[0]}:{right[1]}"
+    return f"{side1}-{side2}" if left <= right else f"{side2}-{side1}"
+
+
+def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket]) -> None:
+    ordered = sorted(packets, key=lambda x: x.ts)
+    scapy_packets = []
+    for cached in ordered:
+        packet = cached.packet.copy()
+        packet.time = cached.ts
+        scapy_packets.append(packet)
+    pcap_path.parent.mkdir(parents=True, exist_ok=True)
+    wrpcap(str(pcap_path), scapy_packets)
 
 
 def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
