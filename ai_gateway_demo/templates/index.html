@@ -124,6 +124,20 @@
 
     {% if page == 'config' %}
     <section class="config-grid">
+      <section class="glass panel" id="onlineCapturePanel">
+        <h2>在线监听</h2>
+        <p class="subtle">持续监听网卡流量，每个周期只回溯处理收到 FIN/RST 或超过 idle timeout 的完整流，未完成流继续缓存。</p>
+        <form id="captureForm" class="inline-config-form panel-content-gap">
+          <input aria-label="监听网卡" name="interface" placeholder="网卡名，如 eth0 / en0 / any" required />
+          <input aria-label="分析周期" name="interval_sec" type="number" min="5" step="1" value="60" placeholder="周期秒数" required />
+          <input aria-label="idle timeout" name="idle_timeout_sec" type="number" min="5" step="1" value="300" placeholder="idle timeout秒数" required />
+          <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" />
+          <button aria-label="开始在线监听" type="submit">开始监听</button>
+          <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
+        </form>
+        <div class="subtle" id="captureStatus">未启动在线监听。</div>
+      </section>
+
       <section class="glass panel" id="upload">
         <h2>上传抓包文件</h2>
         <form id="uploadForm" class="panel-content-gap">
@@ -671,12 +685,27 @@
       if (has('topMinor')) $('topMinor').textContent = derived.hottestMinor;
     }
 
+    function renderCaptureStatus(capture) {
+      if (!has('captureStatus')) return;
+      const state = capture?.running ? '运行中' : '已停止';
+      const lines = [
+        `状态：${state}；${capture?.message || '未启动在线监听'}`,
+        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；idle timeout：${capture?.idle_timeout_sec || 300}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `最近处理：${capture?.last_window_finished_at || '-'}；流 ${capture?.last_finalized_flows ?? 0} 条 / 报文 ${capture?.last_finalized_packets ?? 0} 个；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
+        `缓存中：${capture?.cached_flows ?? 0} 条流 / ${capture?.cached_packets ?? 0} 个报文；累计处理：${capture?.total_finalized_flows ?? 0} 条流 / ${capture?.total_inserted ?? 0} 条入库`,
+      ];
+      if (capture?.last_error) lines.push(`错误：${capture.last_error}`);
+      $('captureStatus').textContent = lines.join('\n');
+    }
+
     async function refreshAll() {
       const qs = queryString();
-      const [statsResp, entriesResp, cfgResp] = await Promise.all([fetch(`/api/stats${qs}`), fetch(`/api/entries${qs}`), fetch('/api/self-hosted')]);
+      const [statsResp, entriesResp, cfgResp, captureResp] = await Promise.all([fetch(`/api/stats${qs}`), fetch(`/api/entries${qs}`), fetch('/api/self-hosted'), fetch('/api/capture/status')]);
       const stats = await statsResp.json();
       const entries = (await entriesResp.json()).items || [];
       const cfgs = (await cfgResp.json()).items || [];
+      const capture = await captureResp.json();
+      renderCaptureStatus(capture);
 
       if (has('totalEntries')) $('totalEntries').textContent = stats.total_entries ?? 0;
       if (has('totalInput')) $('totalInput').textContent = compact(stats.total_input_tokens);
@@ -742,6 +771,25 @@
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
     if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
+    if (has('captureForm')) $('captureForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderCaptureStatus(data);
+        $('status').textContent = data.ok ? '在线监听已启动。' : `在线监听启动失败：${data.message || '未知错误'}`;
+      } catch (err) {
+        $('status').textContent = `在线监听启动失败：${err.message || err}`;
+      }
+    };
+    if (has('stopCapture')) $('stopCapture').onclick = async () => {
+      const resp = await fetch('/api/capture/stop', { method: 'POST' });
+      const data = await resp.json();
+      renderCaptureStatus(data);
+      $('status').textContent = '在线监听已停止。';
+      await refreshAll();
+    };
     if (has('cfgForm')) $('cfgForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -880,6 +928,16 @@
     renderTopology();
     if (['home', 'config'].includes(document.body.dataset.page || '')) {
       refreshAll();
+      window.setInterval(async () => {
+        try {
+          const resp = await fetch('/api/capture/status');
+          const capture = await resp.json();
+          renderCaptureStatus(capture);
+          if (capture.running || capture.last_window_finished_at) await refreshAll();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 10000);
     }
   </script>
 </body>

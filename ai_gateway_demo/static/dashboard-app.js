@@ -157,6 +157,21 @@ async function fetchJSON(url) {
   return resp.json();
 }
 
+async function postForm(url, fields = {}) {
+  const fd = new FormData();
+  Object.entries(fields).forEach(([key, value]) => fd.append(key, value));
+  const resp = await fetch(url, { method: 'POST', body: fd });
+  if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+function splitEndpoint(raw) {
+  const value = (raw || '').trim();
+  const idx = value.lastIndexOf(':');
+  if (idx <= 0 || idx === value.length - 1) return { host: value, port: '443' };
+  return { host: value.slice(0, idx).trim(), port: value.slice(idx + 1).trim() || '443' };
+}
+
 function uploadFile(file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -783,9 +798,9 @@ function UploadPanel({ uploadFileName, uploadProgress, onFileChange, onUpload, o
       <div className="mb-4 flex items-center justify-between">
         <div>
           <div className="text-sm font-medium text-white">Upload PCAP</div>
-          <div className="mt-1 text-xs text-slate-500">Upload and refresh all analytic modules</div>
+          <div className="mt-1 text-xs text-slate-500">离线补录：上传历史 PCAP 并刷新看板</div>
         </div>
-        <div className="rounded-full border border-cyan-300/15 bg-cyan-300/10 px-3 py-1 text-xs text-cyan-100">Realtime</div>
+        <div className="rounded-full border border-white/8 bg-white/[0.04] px-3 py-1 text-xs text-slate-300">Offline</div>
       </div>
       <label className="block cursor-pointer rounded-[26px] border border-dashed border-white/10 bg-black/20 px-4 py-6 text-center">
         <input type="file" accept=".pcap,.pcapng" className="hidden" onChange=${onFileChange} />
@@ -800,6 +815,38 @@ function UploadPanel({ uploadFileName, uploadProgress, onFileChange, onUpload, o
       <div className="mt-4 grid grid-cols-2 gap-3">
         <button onClick=${onUpload} disabled=${busy || !uploadFileName} className="rounded-[20px] border border-violet-300/20 bg-violet-400/12 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">上传并分析</button>
         <button onClick=${onClearEntries} className="rounded-[20px] border border-white/8 bg-white/[0.04] px-4 py-3 text-sm text-slate-300">清空记录</button>
+      </div>
+    </div>
+  `;
+}
+
+function CapturePanel({ capture, form, setForm, onStart, onStop, busy }) {
+  const running = Boolean(capture?.running);
+  return html`
+    <div className="rounded-[26px] border border-white/8 bg-white/[0.04] p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-medium text-white">Online capture</div>
+          <div className="mt-1 text-xs text-slate-500">周期性回溯 FIN/RST 或 idle timeout 的完整流</div>
+        </div>
+        <div className=${`rounded-full border px-3 py-1 text-xs ${running ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-100' : 'border-white/8 bg-white/[0.04] text-slate-300'}`}>${running ? 'Running' : 'Stopped'}</div>
+      </div>
+      <div className="grid gap-3 md:grid-cols-[1fr_110px_150px]">
+        <input value=${form.interface} onInput=${(e) => setForm((s) => ({ ...s, interface: e.target.value }))} placeholder="网卡名，如 eth0 / en0 / any" className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+        <input value=${form.interval_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, interval_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+        <input value=${form.idle_timeout_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, idle_timeout_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+      </div>
+      <input value=${form.bpf_filter} onInput=${(e) => setForm((s) => ({ ...s, bpf_filter: e.target.value }))} placeholder="BPF过滤表达式，默认 tcp，可填 tcp port 443" className="mt-3 w-full rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+      <div className="mt-4 grid grid-cols-2 gap-3">
+        <button onClick=${onStart} disabled=${busy || running || !form.interface.trim()} className="rounded-[20px] border border-emerald-300/20 bg-emerald-400/12 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">开始监听</button>
+        <button onClick=${onStop} disabled=${busy || !running} className="rounded-[20px] border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-50 disabled:cursor-not-allowed disabled:opacity-50">停止监听</button>
+      </div>
+      <div className="mt-4 rounded-[20px] border border-white/8 bg-black/20 p-4 text-xs leading-6 text-slate-400">
+        <div>${capture?.message || '未启动在线监听'}</div>
+        <div>周期：${capture?.interval_sec || form.interval_sec || 60}s · idle timeout：${capture?.idle_timeout_sec || form.idle_timeout_sec || 300}s</div>
+        <div>最近处理：${capture?.last_finalized_flows ?? 0} 条流 / ${capture?.last_finalized_packets ?? 0} 个报文；入库 ${capture?.last_inserted ?? 0} 条</div>
+        <div>缓存中：${capture?.cached_flows ?? 0} 条流 / ${capture?.cached_packets ?? 0} 个报文；累计处理 ${capture?.total_finalized_flows ?? 0} 条流</div>
+        ${capture?.last_error ? html`<div className="mt-1 text-rose-200">错误：${capture.last_error}</div>` : null}
       </div>
     </div>
   `;
@@ -825,7 +872,7 @@ function ConfigPanel({ configs, form, setForm, onSubmit, onClear, onDelete }) {
           <div key=${cfg.id} className="flex items-center justify-between rounded-[20px] border border-white/8 bg-black/20 px-4 py-3">
             <div>
               <div className="text-sm font-medium text-white">${cfg.name}</div>
-              <div className="mt-1 text-xs text-slate-500">${cfg.server_ip}</div>
+              <div className="mt-1 text-xs text-slate-500">${cfg.server_ip}:${cfg.server_port || 443}</div>
             </div>
             <button onClick=${() => onDelete(cfg.id)} className="rounded-[16px] border border-white/8 px-3 py-2 text-xs text-slate-300">删除</button>
           </div>
@@ -846,19 +893,23 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [capture, setCapture] = useState({ running: false, interval_sec: 60, message: '未启动在线监听' });
+  const [captureForm, setCaptureForm] = useState({ interface: '', interval_sec: '60', idle_timeout_sec: '300', bpf_filter: 'tcp' });
 
   const refreshAll = useCallback(async (nextFilters = filters) => {
     const qs = buildQueryString(nextFilters);
     setBusy(true);
     try {
-      const [statsResp, entriesResp, cfgResp] = await Promise.all([
+      const [statsResp, entriesResp, cfgResp, captureResp] = await Promise.all([
         fetchJSON(`/api/stats${qs}`),
         fetchJSON(`/api/entries${qs}`),
         fetchJSON('/api/self-hosted'),
+        fetchJSON('/api/capture/status'),
       ]);
       setStats(statsResp);
       setEntries(entriesResp.items || []);
       setConfigs(cfgResp.items || []);
+      setCapture(captureResp || {});
       setStatus(`Updated ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`);
     } catch (error) {
       console.error(error);
@@ -871,6 +922,19 @@ function App() {
   useEffect(() => {
     refreshAll(filters);
   }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      try {
+        const captureResp = await fetchJSON('/api/capture/status');
+        setCapture(captureResp || {});
+        if (captureResp?.running || captureResp?.last_window_finished_at) await refreshAll(filters);
+      } catch (error) {
+        console.error(error);
+      }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [filters, refreshAll]);
 
   const searchedEntries = useMemo(() => filterEntries(entries, search), [entries, search]);
   const trendData = useMemo(() => bucketEntries(searchedEntries), [searchedEntries]);
@@ -917,8 +981,10 @@ function App() {
       return;
     }
     const fd = new FormData();
+    const endpoint = splitEndpoint(configForm.server_ip);
     fd.append('name', configForm.name.trim());
-    fd.append('server_ip', configForm.server_ip.trim());
+    fd.append('server_ip', endpoint.host);
+    fd.append('server_port', endpoint.port);
     await fetch('/api/self-hosted', { method: 'POST', body: fd });
     setConfigForm({ name: '', server_ip: '' });
     setStatus('自建配置已保存。');
@@ -935,6 +1001,41 @@ function App() {
     await fetch('/api/self-hosted/clear', { method: 'POST' });
     setStatus('自建配置已清空。');
     await refreshAll(filters);
+  };
+
+
+  const onStartCapture = async () => {
+    setBusy(true);
+    try {
+      const result = await postForm('/api/capture/start', {
+        interface: captureForm.interface.trim(),
+        interval_sec: captureForm.interval_sec || '60',
+        idle_timeout_sec: captureForm.idle_timeout_sec || '300',
+        bpf_filter: captureForm.bpf_filter || 'tcp',
+      });
+      setCapture(result || {});
+      setStatus(result.ok ? '在线监听已启动。' : `在线监听启动失败：${result.message || '未知错误'}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(`在线监听启动失败：${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onStopCapture = async () => {
+    setBusy(true);
+    try {
+      const result = await postForm('/api/capture/stop');
+      setCapture(result || {});
+      setStatus('在线监听已停止。');
+      await refreshAll(filters);
+    } catch (error) {
+      console.error(error);
+      setStatus(`停止监听失败：${error.message}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const applyFilters = async () => refreshAll(filters);
@@ -1000,6 +1101,14 @@ function App() {
               </${Panel}>
               <${Panel} title="Control center" subtitle="将上传与配置纳入统一运营视图，而不是零散工具区。">
                 <div className="grid gap-4">
+                  <${CapturePanel}
+                    capture=${capture}
+                    form=${captureForm}
+                    setForm=${setCaptureForm}
+                    onStart=${onStartCapture}
+                    onStop=${onStopCapture}
+                    busy=${busy}
+                  />
                   <${UploadPanel}
                     uploadFileName=${selectedFile?.name || ''}
                     uploadProgress=${uploadProgress}
