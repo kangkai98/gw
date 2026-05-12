@@ -189,37 +189,30 @@ def _has_token_payload(payload: str) -> bool:
     return count_tokens(payload) > 0
 
 
-def _packet_to_meta(p) -> PacketMeta | None:
-    if IP not in p or TCP not in p:
-        return None
-    ip = p[IP]
-    tcp = p[TCP]
-    raw_bytes = bytes(tcp[Raw]) if Raw in tcp else b""
-    return PacketMeta(
-        ts=float(p.time),
-        src=str(ip.src),
-        dst=str(ip.dst),
-        sport=int(tcp.sport),
-        dport=int(tcp.dport),
-        payload=decode_payload(raw_bytes),
-        flow_key=f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}",
-        raw=raw_bytes,
-        wire_len=int(len(p)),
-        sni=_extract_tls_sni(raw_bytes),
-    )
-
-
-def extract_packet_metas(packets: Iterable) -> list[PacketMeta]:
+def extract_packets(pcap_path: Path) -> list[PacketMeta]:
+    packets = rdpcap(str(pcap_path))
     result: list[PacketMeta] = []
     for p in packets:
-        meta = _packet_to_meta(p)
-        if meta is not None:
-            result.append(meta)
+        if IP not in p or TCP not in p:
+            continue
+        ip = p[IP]
+        tcp = p[TCP]
+        raw_bytes = bytes(tcp[Raw]) if Raw in tcp else b""
+        result.append(
+            PacketMeta(
+                ts=float(p.time),
+                src=str(ip.src),
+                dst=str(ip.dst),
+                sport=int(tcp.sport),
+                dport=int(tcp.dport),
+                payload=decode_payload(raw_bytes),
+                flow_key=f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}",
+                raw=raw_bytes,
+                wire_len=int(len(p)),
+                sni=_extract_tls_sni(raw_bytes),
+            )
+        )
     return sorted(result, key=lambda x: x.ts)
-
-
-def extract_packets(pcap_path: Path) -> list[PacketMeta]:
-    return extract_packet_metas(rdpcap(str(pcap_path)))
 
 
 def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
@@ -837,11 +830,11 @@ def _infer_entry_flow_key(
     return f"{client_ip}:?-{server_ip}:?"
 
 
-def parse_packet_metas_to_entries(packets: list[PacketMeta], self_hosted_configs: list[dict]) -> list[dict]:
+def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+    packets = extract_packets(pcap_path)
     if not packets:
         return []
 
-    packets = sorted(packets, key=lambda x: x.ts)
     flows = group_bi_flows(packets)
     picked = _pick_flows(flows)
     if not picked:
@@ -877,11 +870,3 @@ def parse_packet_metas_to_entries(packets: list[PacketMeta], self_hosted_configs
 
     out_entries.sort(key=lambda x: x.get("start_time_rel_s", 0.0))
     return out_entries
-
-
-def parse_packets_to_entries(packets: Iterable, self_hosted_configs: list[dict]) -> list[dict]:
-    return parse_packet_metas_to_entries(extract_packet_metas(packets), self_hosted_configs)
-
-
-def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
-    return parse_packet_metas_to_entries(extract_packets(pcap_path), self_hosted_configs)
