@@ -258,21 +258,18 @@ class OnlineCaptureManager:
         self._status.cached_packets = sum(len(flow.packets) for flow in self._flows.values())
 
     def _analyze_packets(self, packets: list[Packet]) -> tuple[int, int]:
-        tmp_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(prefix="ai_gateway_ready_", suffix=".pcap", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            wrpcap(str(tmp_path), packets)
-            configs = list_self_hosted()
-            entries = parse_pcap_to_entries(tmp_path, self_hosted_configs=configs)
-            inserted = sum(1 for entry in entries if insert_entry(entry))
-            return len(entries), inserted
-        finally:
-            if tmp_path is not None:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
+        with tempfile.NamedTemporaryFile(
+            dir=self.output_dir,
+            prefix="ready_flows_",
+            suffix=".pcap",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+        wrpcap(str(tmp_path), packets)
+        configs = list_self_hosted()
+        entries = parse_pcap_to_entries(tmp_path, self_hosted_configs=configs)
+        inserted = sum(1 for entry in entries if insert_entry(entry))
+        return len(entries), inserted
 
 
 def _flow_key(packet: Packet) -> tuple[str, int, str, int] | None:
