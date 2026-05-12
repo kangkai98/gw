@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import json
@@ -15,6 +16,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .capture import OnlineCaptureManager
 from .db import (
     add_self_hosted,
     clear_entries,
@@ -37,6 +39,22 @@ init_db()
 
 app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
 templates = Jinja2Templates(directory="ai_gateway_demo/templates")
+capture_manager = OnlineCaptureManager()
+
+
+@app.on_event("startup")
+def startup_online_capture() -> None:
+    interface = os.getenv("AI_GATEWAY_LISTEN_INTERFACE", "").strip()
+    if not interface:
+        return
+    interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "60") or "60")
+    bpf_filter = os.getenv("AI_GATEWAY_LISTEN_FILTER", "tcp")
+    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "300") or "300")
+    try:
+        capture_manager.start(interface=interface, interval_sec=interval, bpf_filter=bpf_filter, idle_timeout_sec=idle_timeout)
+    except Exception:
+        # Keep the web app available even if the host lacks live capture permissions.
+        pass
 
 
 @app.get("/api/entries")
@@ -97,6 +115,35 @@ async def api_upload(file: UploadFile = File(...)):
 def api_clear():
     clear_entries()
     return {"ok": True}
+
+
+@app.get("/api/capture/status")
+def api_capture_status():
+    return capture_manager.status()
+
+
+@app.post("/api/capture/start")
+def api_capture_start(
+    interface: str = Form(...),
+    interval_sec: int = Form(default=60),
+    bpf_filter: str = Form(default="tcp"),
+    idle_timeout_sec: int = Form(default=300),
+):
+    try:
+        status = capture_manager.start(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+        )
+        return {"ok": True, **status}
+    except Exception as exc:
+        return {**capture_manager.status(), "ok": False, "message": str(exc)}
+
+
+@app.post("/api/capture/stop")
+def api_capture_stop():
+    return {"ok": True, **capture_manager.stop()}
 
 
 @app.get("/api/self-hosted")
