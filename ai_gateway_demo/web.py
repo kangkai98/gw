@@ -49,8 +49,9 @@ def startup_online_capture() -> None:
         return
     interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "60") or "60")
     bpf_filter = os.getenv("AI_GATEWAY_LISTEN_FILTER", "tcp")
+    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "300") or "300")
     try:
-        capture_manager.start(interface=interface, interval_sec=interval, bpf_filter=bpf_filter)
+        capture_manager.start(interface=interface, interval_sec=interval, bpf_filter=bpf_filter, idle_timeout_sec=idle_timeout)
     except Exception:
         # Keep the web app available even if the host lacks live capture permissions.
         pass
@@ -126,9 +127,15 @@ def api_capture_start(
     interface: str = Form(...),
     interval_sec: int = Form(default=60),
     bpf_filter: str = Form(default="tcp"),
+    idle_timeout_sec: int = Form(default=300),
 ):
     try:
-        status = capture_manager.start(interface=interface, interval_sec=interval_sec, bpf_filter=bpf_filter)
+        status = capture_manager.start(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+        )
         return {"ok": True, **status}
     except Exception as exc:
         return {**capture_manager.status(), "ok": False, "message": str(exc)}

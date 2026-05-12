@@ -827,13 +827,14 @@ function CapturePanel({ capture, form, setForm, onStart, onStop, busy }) {
       <div className="mb-4 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">Online capture</div>
-          <div className="mt-1 text-xs text-slate-500">按固定周期生成抓包窗口并自动分析</div>
+          <div className="mt-1 text-xs text-slate-500">周期性处理 FIN/RST 或 idle timeout 的完整流</div>
         </div>
         <div className=${`rounded-full border px-3 py-1 text-xs ${running ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-100' : 'border-white/8 bg-white/[0.04] text-slate-300'}`}>${running ? 'Running' : 'Stopped'}</div>
       </div>
-      <div className="grid gap-3 md:grid-cols-[1fr_110px]">
+      <div className="grid gap-3 md:grid-cols-[1fr_110px_150px]">
         <input value=${form.interface} onInput=${(e) => setForm((s) => ({ ...s, interface: e.target.value }))} placeholder="网卡名，如 eth0 / en0 / any" className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
         <input value=${form.interval_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, interval_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+        <input value=${form.idle_timeout_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, idle_timeout_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
       </div>
       <input value=${form.bpf_filter} onInput=${(e) => setForm((s) => ({ ...s, bpf_filter: e.target.value }))} placeholder="BPF过滤表达式，默认 tcp，可填 tcp port 443" className="mt-3 w-full rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -842,9 +843,9 @@ function CapturePanel({ capture, form, setForm, onStart, onStop, busy }) {
       </div>
       <div className="mt-4 rounded-[20px] border border-white/8 bg-black/20 p-4 text-xs leading-6 text-slate-400">
         <div>${capture?.message || '未启动在线监听'}</div>
-        <div>周期：${capture?.interval_sec || form.interval_sec || 60}s · 最近窗口：${capture?.last_window_finished_at || '--'}</div>
-        <div>最近结果：检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条</div>
-        <div>累计：${capture?.total_windows ?? 0} 个窗口 / ${capture?.total_inserted ?? 0} 条入库</div>
+        <div>周期：${capture?.interval_sec || form.interval_sec || 60}s · idle timeout：${capture?.idle_timeout_sec || form.idle_timeout_sec || 300}s</div>
+        <div>最近处理：${capture?.last_finalized_flows ?? 0} 条流 / ${capture?.last_finalized_packets ?? 0} 个报文；入库 ${capture?.last_inserted ?? 0} 条</div>
+        <div>缓存中：${capture?.cached_flows ?? 0} 条流 / ${capture?.cached_packets ?? 0} 个报文；累计处理 ${capture?.total_finalized_flows ?? 0} 条流</div>
         ${capture?.last_error ? html`<div className="mt-1 text-rose-200">错误：${capture.last_error}</div>` : null}
       </div>
     </div>
@@ -893,7 +894,7 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [capture, setCapture] = useState({ running: false, interval_sec: 60, message: '未启动在线监听' });
-  const [captureForm, setCaptureForm] = useState({ interface: '', interval_sec: '60', bpf_filter: 'tcp' });
+  const [captureForm, setCaptureForm] = useState({ interface: '', interval_sec: '60', idle_timeout_sec: '300', bpf_filter: 'tcp' });
 
   const refreshAll = useCallback(async (nextFilters = filters) => {
     const qs = buildQueryString(nextFilters);
@@ -1009,6 +1010,7 @@ function App() {
       const result = await postForm('/api/capture/start', {
         interface: captureForm.interface.trim(),
         interval_sec: captureForm.interval_sec || '60',
+        idle_timeout_sec: captureForm.idle_timeout_sec || '300',
         bpf_filter: captureForm.bpf_filter || 'tcp',
       });
       setCapture(result || {});
