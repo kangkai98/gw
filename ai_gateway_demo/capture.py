@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+import shlex
+import shutil
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-from scapy.all import IP, TCP, AsyncSniffer, wrpcap
+from scapy.all import IP, TCP
 from scapy.packet import Packet
+from scapy.utils import PcapReader
 
 from .db import insert_entry, list_self_hosted
-from .parser import parse_pcap_to_entries
+from .parser import parse_packets_to_entries
 
-CAPTURE_PATH = Path("captures")
-CAPTURE_PATH.mkdir(exist_ok=True)
 DEFAULT_IDLE_TIMEOUT_SEC = 300
 
 
@@ -56,16 +57,13 @@ class _CachedFlow:
 
 @dataclass
 class OnlineCaptureManager:
-    output_dir: Path = CAPTURE_PATH
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
-    _sniffer: AsyncSniffer | None = field(default=None, init=False)
+    _reader_thread: threading.Thread | None = field(default=None, init=False)
+    _proc: subprocess.Popen[bytes] | None = field(default=None, init=False)
     _status: CaptureStatus = field(default_factory=CaptureStatus, init=False)
     _flows: dict[tuple[str, int, str, int], _CachedFlow] = field(default_factory=dict, init=False)
-
-    def __post_init__(self) -> None:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -82,6 +80,8 @@ class OnlineCaptureManager:
         interface = (interface or "").strip()
         if not interface:
             raise ValueError("interface 不能为空")
+        if shutil.which("tcpdump") is None:
+            raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
         interval_sec = max(5, int(interval_sec or 60))
         idle_timeout_sec = max(5, int(idle_timeout_sec or DEFAULT_IDLE_TIMEOUT_SEC))
@@ -113,7 +113,7 @@ class OnlineCaptureManager:
 
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
-        self._stop_sniffer()
+        self._terminate_tcpdump()
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=5)
@@ -125,32 +125,70 @@ class OnlineCaptureManager:
             return dict(self._status.__dict__)
 
     def _run_loop(self, interface: str, interval_sec: int, bpf_filter: str, idle_timeout_sec: int) -> None:
+        proc: subprocess.Popen[bytes] | None = None
         try:
-            self._sniffer = AsyncSniffer(
-                iface=interface,
-                filter=bpf_filter,
-                store=False,
-                prn=self._handle_packet,
+            cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", "-"]
+            if bpf_filter:
+                cmd.extend(shlex.split(bpf_filter))
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self._proc = proc
+            self._reader_thread = threading.Thread(
+                target=self._read_tcpdump_stdout,
+                args=(proc,),
+                name="ai-gateway-tcpdump-reader",
+                daemon=True,
             )
-            self._sniffer.start()
-            self._set_message(f"正在监听 {interface}；等待周期性回溯处理")
+            self._reader_thread.start()
+            self._set_message(f"正在通过 tcpdump 监听 {interface}；等待周期性回溯处理")
 
             while not self._stop_event.wait(timeout=interval_sec):
                 self._process_ready_flows(idle_timeout_sec)
+                if proc.poll() is not None:
+                    break
 
-            self._process_ready_flows(idle_timeout_sec, flush_all=True)
+            if self._stop_event.is_set():
+                self._process_ready_flows(idle_timeout_sec, flush_all=True)
+
+            return_code = proc.wait(timeout=5) if proc.poll() is None else proc.returncode
+            stderr = (proc.stderr.read() if proc.stderr else b"").decode("utf-8", errors="ignore").strip()
+            if return_code not in (0, -15, -2, 130, 143) and not self._stop_event.is_set():
+                raise RuntimeError(stderr or f"tcpdump 退出码 {return_code}")
         except Exception as exc:  # pragma: no cover - depends on local capture privileges/tooling
             with self._lock:
                 self._status.last_error = str(exc)
                 self._status.message = f"在线监听异常：{exc}"
         finally:
-            self._stop_sniffer()
+            self._terminate_tcpdump()
+            reader_thread = self._reader_thread
+            if reader_thread and reader_thread.is_alive():
+                reader_thread.join(timeout=2)
             with self._lock:
+                self._proc = None
+                self._reader_thread = None
                 self._status.running = False
                 self._status.current_file = None
                 self._sync_cache_counts_locked()
-                if self._status.message.startswith("正在监听"):
+                if self._status.message.startswith("正在通过 tcpdump"):
                     self._status.message = "在线监听已停止"
+
+    def _read_tcpdump_stdout(self, proc: subprocess.Popen[bytes]) -> None:
+        if proc.stdout is None:
+            return
+        reader = None
+        try:
+            reader = PcapReader(proc.stdout)
+            for packet in reader:
+                if self._stop_event.is_set():
+                    break
+                self._handle_packet(packet)
+        except Exception as exc:  # pragma: no cover - stream may end while tcpdump is stopping
+            if not self._stop_event.is_set():
+                with self._lock:
+                    self._status.last_error = str(exc)
+                    self._status.message = f"读取 tcpdump 数据异常：{exc}"
+        finally:
+            if reader is not None:
+                reader.close()
 
     def _handle_packet(self, packet: Packet) -> None:
         key = _flow_key(packet)
@@ -199,20 +237,17 @@ class OnlineCaptureManager:
                 self._status.message = "本周期没有 FIN/RST 或 idle timeout 的完整流，继续缓存未完成报文"
             return
 
-        file_path = self.output_dir / f"online_flows_{window_started.strftime('%Y%m%d_%H%M%S')}.pcap"
         with self._lock:
-            self._status.current_file = str(file_path)
             self._status.last_window_started_at = _format_dt(window_started)
             self._status.last_error = None
             self._status.message = f"正在回溯分析 {ready_flow_count} 条已完成/超时流"
 
         try:
             ready_packets.sort(key=lambda pkt: float(getattr(pkt, "time", 0.0)))
-            wrpcap(str(file_path), ready_packets)
-            detected, inserted = self._analyze_file(file_path)
+            detected, inserted = self._analyze_packets(ready_packets)
             with self._lock:
                 self._status.last_window_finished_at = _now_text()
-                self._status.last_pcap = str(file_path)
+                self._status.last_pcap = None
                 self._status.last_detected = detected
                 self._status.last_inserted = inserted
                 self._status.last_finalized_flows = ready_flow_count
@@ -222,33 +257,29 @@ class OnlineCaptureManager:
                 self._status.total_inserted += inserted
                 self._status.total_finalized_flows += ready_flow_count
                 self._status.total_finalized_packets += len(ready_packets)
-                self._status.current_file = None
                 self._status.message = f"本周期处理 {ready_flow_count} 条流/{len(ready_packets)} 个报文：检测 {detected} 条，入库 {inserted} 条"
                 self._sync_cache_counts_locked()
-        except Exception as exc:  # pragma: no cover - file/parser dependent
+        except Exception as exc:  # pragma: no cover - parser dependent
             with self._lock:
                 self._status.last_error = str(exc)
-                self._status.current_file = None
                 self._status.message = f"在线回溯分析异常：{exc}"
 
-    def _analyze_file(self, file_path: Path) -> tuple[int, int]:
-        if not file_path.exists() or file_path.stat().st_size == 0:
-            return 0, 0
+    def _analyze_packets(self, packets: list[Packet]) -> tuple[int, int]:
         configs = list_self_hosted()
-        entries = parse_pcap_to_entries(file_path, self_hosted_configs=configs)
+        entries = parse_packets_to_entries(packets, self_hosted_configs=configs)
         inserted = sum(1 for entry in entries if insert_entry(entry))
         return len(entries), inserted
 
-    def _stop_sniffer(self) -> None:
-        sniffer = self._sniffer
-        if sniffer is None:
+    def _terminate_tcpdump(self) -> None:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
             return
+        proc.terminate()
         try:
-            sniffer.stop()
-        except Exception:
-            pass
-        finally:
-            self._sniffer = None
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
 
     def _set_message(self, message: str) -> None:
         with self._lock:

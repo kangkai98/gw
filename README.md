@@ -31,10 +31,10 @@ python -m ai_gateway_demo --port 8000 --listen-interface eth0 --listen-interval 
 
 ## 在线监听模式
 
-在线模式使用 Scapy 实时抓包，运行进程需要具备抓包权限（例如 Linux 下使用 root、`CAP_NET_RAW`/`CAP_NET_ADMIN`，或提前配置抓包权限）。
+在线模式通过 `tcpdump -w -` 实时抓包并在内存中按 TCP 双向流缓存报文，运行进程需要具备抓包权限（例如 Linux 下使用 root、`CAP_NET_RAW`/`CAP_NET_ADMIN`，或提前配置抓包权限）。
 
 - 页面启动后进入“配置”页，在“在线监听”中填写网卡名（如 `eth0`、`en0`、`any`）、分析周期（默认 `60` 秒）、idle timeout（默认 `300` 秒）和 BPF 过滤表达式（默认 `tcp`），点击“开始监听”。
-- 监听线程会持续缓存未完成 TCP 流；每个分析周期只取出已经收到 FIN/RST 或最后一个报文距当前时间超过 idle timeout 的流，写成 `captures/online_flows_YYYYMMDD_HHMMSS.pcap` 后复用现有解析逻辑入库。
+- 监听线程会持续缓存未完成 TCP 流；每个分析周期只取出已经收到 FIN/RST 或最后一个报文距当前时间超过 idle timeout 的流，直接复用现有解析逻辑入库，不再额外落盘新的分析 pcap。
 - 未达到 FIN/RST/idle timeout 条件的报文不会被处理或丢弃，会继续留在内存缓存中等待后续周期。
 - 也可以通过命令行自动启动：`python -m ai_gateway_demo --listen-interface eth0 --listen-interval 60 --listen-idle-timeout 300 --listen-filter "tcp port 443"`。
 - “停止监听”会停止实时抓包，并在退出前尝试 flush 当前缓存中的流。
