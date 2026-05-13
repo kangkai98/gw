@@ -26,6 +26,7 @@ class CachedTcpPacket:
     flow_key: str
     tcp_flags: int
     packet: Any
+    capture_seq: int
 
 
 @dataclass
@@ -62,6 +63,7 @@ class OnlineCaptureManager:
     _proc: subprocess.Popen[bytes] | None = field(default=None, init=False)
     _status: CaptureStatus = field(default_factory=CaptureStatus, init=False)
     _flow_cache: dict[str, list[CachedTcpPacket]] = field(default_factory=dict, init=False)
+    _next_packet_seq: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +90,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
                 running=True,
@@ -188,11 +191,12 @@ class OnlineCaptureManager:
     def _analyze_window(self, file_path: Path, idle_timeout_sec: int) -> tuple[int, int, int, Path | None]:
         packets: list[CachedTcpPacket] = []
         if file_path.exists() and file_path.stat().st_size > 0:
-            packets = _extract_cached_tcp_packets(file_path)
+            packets = _extract_cached_tcp_packets(file_path, start_seq=self._next_packet_seq)
+            self._next_packet_seq += len(packets)
             for flow_key, flow_packets in _group_cached_flows(packets).items():
                 cached = self._flow_cache.setdefault(flow_key, [])
                 cached.extend(flow_packets)
-                cached.sort(key=lambda p: p.ts)
+                cached.sort(key=lambda p: p.capture_seq)
 
         observation_ts = max((p.ts for p in packets), default=time.time())
         ready_keys = self._ready_flow_keys(observation_ts, idle_timeout_sec)
@@ -234,9 +238,9 @@ class OnlineCaptureManager:
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
 
-def _extract_cached_tcp_packets(pcap_path: Path) -> list[CachedTcpPacket]:
+def _extract_cached_tcp_packets(pcap_path: Path, start_seq: int = 0) -> list[CachedTcpPacket]:
     result: list[CachedTcpPacket] = []
-    for packet in rdpcap(str(pcap_path)):
+    for packet_index, packet in enumerate(rdpcap(str(pcap_path))):
         if IP not in packet or TCP not in packet:
             continue
         ip = packet[IP]
@@ -247,9 +251,10 @@ def _extract_cached_tcp_packets(pcap_path: Path) -> list[CachedTcpPacket]:
                 flow_key=_canonical_flow_key(str(ip.src), int(tcp.sport), str(ip.dst), int(tcp.dport)),
                 tcp_flags=int(tcp.flags),
                 packet=packet.copy(),
+                capture_seq=start_seq + packet_index,
             )
         )
-    return sorted(result, key=lambda x: x.ts)
+    return result
 
 
 def _group_cached_flows(packets: list[CachedTcpPacket]) -> dict[str, list[CachedTcpPacket]]:
@@ -268,7 +273,7 @@ def _canonical_flow_key(src: str, sport: int, dst: str, dport: int) -> str:
 
 
 def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket]) -> None:
-    ordered = sorted(packets, key=lambda x: x.ts)
+    ordered = sorted(packets, key=lambda x: x.capture_seq)
     scapy_packets = []
     for cached in ordered:
         packet = cached.packet.copy()
