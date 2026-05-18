@@ -141,7 +141,7 @@
       </section>
 
       <section class="glass panel" id="upload">
-        <h2>上传抓包文件</h2>
+        <h2>离线抓包上传</h2>
         <form id="uploadForm" class="panel-content-gap">
           <label class="upload-shell" aria-label="PCAP 文件">
             <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
@@ -269,7 +269,7 @@
       </section>
 
       <section class="glass panel chart-panel probe-chart-panel">
-        <div class="panel-head"><h2>拨测成功率与端到端时延</h2><span class="subtle">最近 50 次拨测</span></div>
+        <div class="panel-head"><h2>拨测端到端时延</h2><span class="subtle">最近 50 次拨测；成功绿色，失败红色</span></div>
         <canvas id="probeTrendChart"></canvas>
       </section>
     </section>
@@ -414,15 +414,22 @@
           type: 'bar',
           data: {
             labels: recent.map(r => String(r.time || '').slice(11, 19)),
-            datasets: [
-              { type: 'bar', label: '成功(1/0)', data: recent.map(r => r.ok ? 1 : 0), yAxisID: 'success', backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.45)' : 'rgba(228,93,110,.45)') },
-              { type: 'line', label: '端到端时延(ms)', data: recent.map(r => Number(r.latency_ms || 0)), yAxisID: 'latency', borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.18)', tension: .25 }
-            ]
+            datasets: [{
+              label: '端到端时延(ms)',
+              data: recent.map(r => Number(r.latency_ms || 0)),
+              backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
+              borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
+              borderWidth: 1,
+              borderRadius: 8,
+            }]
           },
           options: chartOptions({
-            scales: {
-              success: { position: 'left', min: 0, max: 1, ticks: { stepSize: 1 } },
-              latency: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false } }
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  afterLabel: (ctx) => recent[ctx.dataIndex]?.ok ? '结果: 成功' : '结果: 失败'
+                }
+              }
             }
           })
         });
