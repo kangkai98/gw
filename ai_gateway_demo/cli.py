@@ -13,7 +13,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--listen-interface", default="", help="启动后自动在线监听的网卡名，如 eth0/en0")
-    parser.add_argument("--listen-interval", type=int, default=60, help="在线监听分析周期（秒），默认 60 秒")
+    parser.add_argument("--listen-interval", type=int, default=60, help="在线监听采集周期（秒），默认 60 秒")
+    parser.add_argument("--listen-idle-timeout", type=int, default=120, help="在线监听流空闲超时（秒），默认 120 秒")
+    parser.add_argument("--listen-max-flow-duration", type=int, default=300, help="在线监听单条流最长缓存时长（秒），默认 300 秒，0 表示不限制")
+    parser.add_argument("--listen-pcap-retention", type=int, default=0, help="online/ready pcap 保留时长（秒），默认 0 表示分析后立即删除")
     parser.add_argument("--listen-filter", default="tcp", help="tcpdump BPF 过滤表达式，默认 tcp")
     return parser
 
@@ -25,6 +28,9 @@ def main() -> None:
         os.environ["AI_GATEWAY_LISTEN_INTERFACE"] = args.listen_interface
         os.environ["AI_GATEWAY_LISTEN_INTERVAL"] = str(args.listen_interval)
         os.environ["AI_GATEWAY_LISTEN_FILTER"] = args.listen_filter
+        os.environ["AI_GATEWAY_LISTEN_IDLE_TIMEOUT"] = str(args.listen_idle_timeout)
+        os.environ["AI_GATEWAY_LISTEN_MAX_FLOW_DURATION"] = str(args.listen_max_flow_duration)
+        os.environ["AI_GATEWAY_LISTEN_PCAP_RETENTION"] = str(args.listen_pcap_retention)
     uvicorn.run("ai_gateway_demo.web:app", host=args.host, port=args.port, reload=False)
 
 
