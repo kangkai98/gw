@@ -397,7 +397,12 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
     collected: list[str] = []
     try:
         while True:
-            line = resp.fp.readline(65536)
+            try:
+                line = resp.fp.readline(65536)
+            except (TimeoutError, socket.timeout):
+                if collected or ttfb_ms is not None:
+                    break
+                raise
             if not line:
                 break
             now_ms = (time.perf_counter() - t0) * 1000
@@ -407,8 +412,10 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
             if not text.startswith("data:"):
                 continue
             payload_text = text[5:].strip()
-            if not payload_text or payload_text == "[DONE]":
+            if not payload_text:
                 continue
+            if payload_text == "[DONE]":
+                break
             try:
                 data = json.loads(payload_text)
             except Exception:

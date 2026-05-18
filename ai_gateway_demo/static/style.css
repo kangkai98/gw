@@ -126,8 +126,8 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .progress-text { display: inline-block; margin-top: 8px; color: #52627e; font-size: 12px; font-weight: 540; }
 
 .status { margin-top: 8px; color: var(--muted); font-size: 14px; }
-.probe-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr); gap: 10px; align-items: end; }
-.probe-full { grid-column: 1 / -1; }
+.probe-form { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+.probe-full { grid-column: auto; }
 .probe-response { border: 1px solid rgba(86,112,159,.16); border-radius: 16px; background: linear-gradient(180deg, rgba(255,255,255,.78), rgba(246,250,255,.66)); overflow: hidden; }
 .probe-response-head { padding: 10px 12px; font-size: 12px; color: #4d6287; border-bottom: 1px solid rgba(86,112,159,.14); background: rgba(255,255,255,.58); }
 .probe-response pre { margin: 0; padding: 12px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.55; max-height: 360px; overflow: auto; }
@@ -135,7 +135,8 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .probe-main-panel { grid-column: auto; }
 .probe-record-panel, .probe-chart-panel { min-height: 360px; }
 .table-scroll { overflow: auto; max-height: 360px; border-radius: 16px; }
-#probeRecordTable { min-width: 980px; }
+#probeRecordTable { min-width: 1060px; }
+#probeTaskTable { min-width: 920px; }
 #probeTrendChart { min-height: 300px; }
 .topology-panel { grid-column: 1 / -1; }
 .topology-graph-fancy { position: relative; margin-top: 14px; min-height: 320px; border-radius: 18px; border: 1px solid rgba(86,112,159,.14); background: radial-gradient(120% 120% at 0% 0%, rgba(122,162,255,.16), rgba(255,255,255,.55)); padding: 18px; overflow: hidden; }
