@@ -49,8 +49,18 @@ def startup_online_capture() -> None:
         return
     interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "60") or "60")
     bpf_filter = os.getenv("AI_GATEWAY_LISTEN_FILTER", "tcp")
+    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "120") or "120")
+    max_flow_duration = int(os.getenv("AI_GATEWAY_LISTEN_MAX_FLOW_DURATION", "300") or "300")
+    pcap_retention = int(os.getenv("AI_GATEWAY_LISTEN_PCAP_RETENTION", "0") or "0")
     try:
-        capture_manager.start(interface=interface, interval_sec=interval, bpf_filter=bpf_filter)
+        capture_manager.start(
+            interface=interface,
+            interval_sec=interval,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout,
+            max_flow_duration_sec=max_flow_duration,
+            pcap_retention_sec=pcap_retention,
+        )
     except Exception:
         # Keep the web app available even if the host lacks tcpdump/capture permissions.
         pass
@@ -126,9 +136,19 @@ def api_capture_start(
     interface: str = Form(...),
     interval_sec: int = Form(default=60),
     bpf_filter: str = Form(default="tcp"),
+    idle_timeout_sec: int = Form(default=120),
+    max_flow_duration_sec: int = Form(default=300),
+    pcap_retention_sec: int = Form(default=0),
 ):
     try:
-        status = capture_manager.start(interface=interface, interval_sec=interval_sec, bpf_filter=bpf_filter)
+        status = capture_manager.start(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+            max_flow_duration_sec=max_flow_duration_sec,
+            pcap_retention_sec=pcap_retention_sec,
+        )
         return {"ok": True, **status}
     except Exception as exc:
         return {**capture_manager.status(), "ok": False, "message": str(exc)}
@@ -377,7 +397,12 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
     collected: list[str] = []
     try:
         while True:
-            line = resp.fp.readline(65536)
+            try:
+                line = resp.fp.readline(65536)
+            except (TimeoutError, socket.timeout):
+                if collected or ttfb_ms is not None:
+                    break
+                raise
             if not line:
                 break
             now_ms = (time.perf_counter() - t0) * 1000
@@ -387,8 +412,10 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
             if not text.startswith("data:"):
                 continue
             payload_text = text[5:].strip()
-            if not payload_text or payload_text == "[DONE]":
+            if not payload_text:
                 continue
+            if payload_text == "[DONE]":
+                break
             try:
                 data = json.loads(payload_text)
             except Exception:
@@ -477,48 +504,3 @@ def api_probe_llm(
         }
     except Exception as exc:  # pragma: no cover - network dependent
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}"}
-
-
-@app.post("/api/probe/mcp")
-def api_probe_mcp(
-    endpoint: str = Form(...),
-    operation: str = Form(default="initialize"),
-    timeout_sec: float = Form(default=10.0),
-    api_key: str = Form(default=""),
-    custom_method: str = Form(default=""),
-):
-    op_map = {
-        "initialize": ("initialize", {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "ai-gateway-demo", "version": "1.0"}}),
-        "tools_list": ("tools/list", {}),
-        "resources_list": ("resources/list", {}),
-        "prompts_list": ("prompts/list", {}),
-    }
-    if operation == "custom":
-        method = (custom_method or "").strip()
-        params = {}
-    else:
-        method, params = op_map.get(operation, op_map["initialize"])
-    if not method:
-        return {"ok": False, "availability": "不可用", "message": "自定义方法不能为空"}
-    payload = {"jsonrpc": "2.0", "id": "probe-1", "method": method, "params": params}
-    headers = {"Content-Type": "application/json"}
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-    timeout_value = max(1.0, min(float(timeout_sec), 60.0))
-    try:
-        status_code, raw, latency_ms = _http_post_json(endpoint, payload, headers, timeout_value)
-        text = raw.decode("utf-8", errors="ignore")
-        body = json.loads(text) if text.strip().startswith("{") else {"raw": text[:2000]}
-        ok = status_code < 400 and "error" not in body
-        return {
-            "ok": ok,
-            "availability": "可用" if ok else "不可用",
-            "status_code": status_code,
-            "latency_ms": round(latency_ms, 1),
-            "operation": operation,
-            "method": method,
-            "result_preview": json.dumps(body.get("result", body.get("error", body)), ensure_ascii=False)[:2000],
-            "message": "MCP拨测完成" if ok else "MCP拨测失败",
-        }
-    except Exception as exc:  # pragma: no cover - network dependent
-        return {"ok": False, "availability": "不可用", "operation": operation, "method": method, "message": f"MCP拨测异常: {exc}"}
