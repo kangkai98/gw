@@ -8,7 +8,10 @@ import shlex
 import ssl
 import time
 import http.client
+import threading
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
@@ -40,6 +43,51 @@ init_db()
 app.mount("/static", StaticFiles(directory="ai_gateway_demo/static"), name="static")
 templates = Jinja2Templates(directory="ai_gateway_demo/templates")
 capture_manager = OnlineCaptureManager()
+
+
+@dataclass
+class ProbeTask:
+    id: int
+    params: dict[str, Any]
+    interval_sec: int
+    last_message: str = "-"
+    last_ok: bool | None = None
+    last_latency_ms: float | None = None
+    running: bool = False
+    thread: threading.Thread | None = None
+    stop_event: threading.Event = field(default_factory=threading.Event)
+
+
+_probe_lock = threading.Lock()
+_probe_tasks: dict[int, ProbeTask] = {}
+_probe_records: list[dict[str, Any]] = []
+_next_probe_task_id = 1
+
+
+def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
+    return {
+        "id": task.id,
+        "task_name": f"任务{task.id}",
+        "target": task.params.get("target", ""),
+        "model": task.params.get("model", ""),
+        "mode": task.params.get("mode", "standard"),
+        "interval_sec": task.interval_sec,
+        "running": task.running,
+        "thread_alive": bool(task.thread and task.thread.is_alive() and not task.stop_event.is_set()),
+        "last_message": task.last_message,
+        "last_ok": task.last_ok,
+        "last_latency_ms": task.last_latency_ms,
+    }
+
+
+def _add_probe_record(record: dict[str, Any]) -> None:
+    with _probe_lock:
+        _probe_records.insert(0, record)
+        del _probe_records[200:]
+
+
+def _probe_now_text() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 
 @app.on_event("startup")
@@ -442,15 +490,14 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
     }
 
 
-@app.post("/api/probe/llm")
-def api_probe_llm(
-    target: str = Form(...),
-    api_key: str = Form(default=""),
-    model: str = Form(default="gpt-4o-mini"),
-    question: str = Form(default="你好"),
-    mode: str = Form(default="standard"),
-    timeout_sec: float = Form(default=20.0),
-):
+def _run_llm_probe(
+    target: str,
+    api_key: str = "",
+    model: str = "gpt-4o-mini",
+    question: str = "你好",
+    mode: str = "standard",
+    timeout_sec: float = 20.0,
+) -> dict[str, Any]:
     chat_url = _to_chat_completions_url(target)
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     headers = {
@@ -504,3 +551,208 @@ def api_probe_llm(
         }
     except Exception as exc:  # pragma: no cover - network dependent
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}"}
+
+
+@app.post("/api/probe/llm")
+def api_probe_llm(
+    target: str = Form(...),
+    api_key: str = Form(default=""),
+    model: str = Form(default="gpt-4o-mini"),
+    question: str = Form(default="你好"),
+    mode: str = Form(default="standard"),
+    timeout_sec: float = Form(default=20.0),
+    trigger: str = Form(default=""),
+):
+    result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
+    if trigger:
+        _add_probe_record(
+            {
+                "time": _probe_now_text(),
+                "task_id": None,
+                "task_name": "单次",
+                "trigger": trigger,
+                "target": (target or "").strip(),
+                "model": (model or "").strip(),
+                "mode": (mode or "standard").strip() or "standard",
+                "ok": bool(result.get("ok")),
+                "status_code": result.get("status_code"),
+                "latency_ms": result.get("latency_ms"),
+                "ttfb_ms": result.get("ttfb_ms"),
+                "ttft_ms": result.get("ttft_ms"),
+                "message": result.get("message") or "",
+            }
+        )
+    return result
+
+
+def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
+    with _probe_lock:
+        task = _probe_tasks.get(task_id)
+        if not task:
+            return
+        params = dict(task.params)
+        task.running = True
+        task.last_message = "拨测中..."
+
+    result = _run_llm_probe(
+        params.get("target", ""),
+        params.get("api_key", ""),
+        params.get("model", "gpt-4o-mini"),
+        params.get("question", "你好"),
+        params.get("mode", "standard"),
+        float(params.get("timeout_sec") or 20.0),
+    )
+    record = {
+        "time": _probe_now_text(),
+        "task_id": task_id,
+        "task_name": f"任务{task_id}",
+        "trigger": trigger,
+        "target": params.get("target", ""),
+        "model": params.get("model", ""),
+        "mode": params.get("mode", "standard"),
+        "ok": bool(result.get("ok")),
+        "status_code": result.get("status_code"),
+        "latency_ms": result.get("latency_ms"),
+        "ttfb_ms": result.get("ttfb_ms"),
+        "ttft_ms": result.get("ttft_ms"),
+        "message": result.get("message") or "",
+    }
+    with _probe_lock:
+        task = _probe_tasks.get(task_id)
+        if not task or task.stop_event.is_set():
+            return
+    _add_probe_record(record)
+    with _probe_lock:
+        task = _probe_tasks.get(task_id)
+        if not task:
+            return
+        task.running = False
+        task.last_ok = bool(result.get("ok"))
+        latency_ms = result.get("latency_ms")
+        task.last_latency_ms = latency_ms if isinstance(latency_ms, (int, float)) else None
+        if task.last_ok and task.last_latency_ms is not None:
+            task.last_message = f"成功 {task.last_latency_ms:.1f}ms"
+        else:
+            task.last_message = str(result.get("message") or "失败")
+
+
+def _probe_task_loop(task_id: int) -> None:
+    while True:
+        with _probe_lock:
+            task = _probe_tasks.get(task_id)
+            if not task or task.stop_event.is_set():
+                return
+            interval_sec = max(5, int(task.interval_sec or 60))
+            stop_event = task.stop_event
+        _run_probe_task_once(task_id)
+        if stop_event.wait(interval_sec):
+            return
+
+
+def _start_probe_task_locked(task: ProbeTask) -> None:
+    if task.thread and task.thread.is_alive():
+        return
+    task.stop_event.clear()
+    task.thread = threading.Thread(target=_probe_task_loop, args=(task.id,), daemon=True)
+    task.thread.start()
+
+
+def _stop_probe_task(task: ProbeTask) -> None:
+    task.stop_event.set()
+    task.running = False
+
+
+@app.get("/api/probe/tasks")
+def api_probe_tasks():
+    with _probe_lock:
+        tasks = [_probe_task_view(task) for task in sorted(_probe_tasks.values(), key=lambda item: item.id)]
+        records = list(_probe_records)
+    return {"items": tasks, "records": records}
+
+
+@app.post("/api/probe/tasks")
+def api_probe_task_add(
+    target: str = Form(...),
+    api_key: str = Form(default=""),
+    model: str = Form(default="gpt-4o-mini"),
+    question: str = Form(default="你好"),
+    mode: str = Form(default="standard"),
+    timeout_sec: float = Form(default=20.0),
+    schedule_interval_sec: int = Form(default=60),
+):
+    global _next_probe_task_id
+    params = {
+        "target": (target or "").strip(),
+        "api_key": (api_key or "").strip(),
+        "model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini",
+        "question": (question or "你好").strip() or "你好",
+        "mode": (mode or "standard").strip() or "standard",
+        "timeout_sec": str(max(2.0, min(float(timeout_sec), 90.0))),
+    }
+    interval_sec = max(5, min(int(schedule_interval_sec or 60), 86400))
+    with _probe_lock:
+        task = ProbeTask(id=_next_probe_task_id, params=params, interval_sec=interval_sec)
+        _next_probe_task_id += 1
+        _probe_tasks[task.id] = task
+        _start_probe_task_locked(task)
+        view = _probe_task_view(task)
+    return {"ok": True, "task": view}
+
+
+@app.post("/api/probe/tasks/{task_id}/start")
+def api_probe_task_start(task_id: int):
+    with _probe_lock:
+        task = _probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        _start_probe_task_locked(task)
+        view = _probe_task_view(task)
+    return {"ok": True, "task": view}
+
+
+@app.post("/api/probe/tasks/{task_id}/stop")
+def api_probe_task_stop(task_id: int):
+    with _probe_lock:
+        task = _probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        _stop_probe_task(task)
+        view = _probe_task_view(task)
+    return {"ok": True, "task": view}
+
+
+@app.delete("/api/probe/tasks/{task_id}")
+def api_probe_task_delete(task_id: int):
+    with _probe_lock:
+        task = _probe_tasks.pop(task_id, None)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        _stop_probe_task(task)
+    return {"ok": True}
+
+
+@app.post("/api/probe/tasks/clear")
+def api_probe_tasks_clear():
+    global _next_probe_task_id
+    with _probe_lock:
+        for task in _probe_tasks.values():
+            _stop_probe_task(task)
+        _probe_tasks.clear()
+        _next_probe_task_id = 1
+    return {"ok": True}
+
+
+@app.get("/api/probe/records")
+def api_probe_records():
+    with _probe_lock:
+        return {"items": list(_probe_records)}
+
+
+@app.post("/api/probe/records/clear")
+def api_probe_records_clear():
+    global _next_probe_task_id
+    with _probe_lock:
+        _probe_records.clear()
+        if not _probe_tasks:
+            _next_probe_task_id = 1
+    return {"ok": True, "next_task_id": _next_probe_task_id}

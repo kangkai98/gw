@@ -210,7 +210,7 @@
     <section class="config-grid probe-grid">
       <section class="glass panel probe-main-panel">
         <h2>大模型API（OpenAI格式）</h2>
-        <p class="subtle">支持单次拨测和页面内周期性拨测。标准返回可用性+端到端时延，流式额外返回 TTFB/TTFT。</p>
+        <p class="subtle">支持单次拨测和服务端周期性拨测，切换到配置页也不会停止。标准返回可用性+端到端时延，流式额外返回 TTFB/TTFT。</p>
         <form id="llmProbeForm" class="probe-form panel-content-gap">
           <label class="filter-item">
             <span>服务URL</span>
@@ -281,7 +281,7 @@
       </section>
 
       <section class="glass panel chart-panel probe-chart-panel">
-        <div class="panel-head"><h2>成功拨测端到端时延</h2><span class="subtle">仅展示成功拨测，柱高为端到端时延</span></div>
+        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">展示成功和失败拨测，柱高为端到端时延</span></div>
         <canvas id="probeTrendChart"></canvas>
       </section>
     </section>
@@ -393,24 +393,21 @@
     const DEFAULT_HEALTH_CFG = { ttft_warn: 1800, ttft_alert: 3500, tpot_warn: 90, tpot_alert: 180 };
     function getHealthCfg() { const cfg = loadCfg('health_cfg') || {}; return { ...DEFAULT_HEALTH_CFG, ...cfg }; }
 
-    const PROBE_RECORDS_KEY = 'llm_probe_records';
     let llmProbeTasks = [];
-    let llmProbeTaskSeq = 1;
+    let llmProbeRecords = [];
     let llmProbeBusy = new Set();
-    function loadProbeRecords() {
-      try { return JSON.parse(localStorage.getItem(PROBE_RECORDS_KEY) || '[]'); } catch { return []; }
-    }
-    function saveProbeRecords(records) {
-      localStorage.setItem(PROBE_RECORDS_KEY, JSON.stringify(records.slice(0, 200)));
-    }
-    function addProbeRecord(record) {
-      const records = loadProbeRecords();
-      records.unshift(record);
-      saveProbeRecords(records);
+
+    async function fetchProbeState() {
+      if (!has('probeTaskTable') && !has('probeRecordTable')) return;
+      const resp = await fetch('/api/probe/tasks');
+      const data = await resp.json();
+      llmProbeTasks = data.items || [];
+      llmProbeRecords = data.records || [];
+      renderProbeTasks();
       renderProbeRecords();
     }
     function renderProbeRecords() {
-      const records = loadProbeRecords();
+      const records = llmProbeRecords || [];
       if (has('probeRecordTable')) {
         const tbody = $('probeRecordTable').querySelector('tbody');
         tbody.innerHTML = records.slice(0, 100).map(r => `
@@ -422,7 +419,7 @@
       }
       if (has('probeTrendChart')) {
         charts.probeTrend?.destroy?.();
-        const recent = records.filter(r => r.ok && Number(r.latency_ms) > 0).slice(0, 50).reverse();
+        const recent = records.slice(0, 50).reverse();
         charts.probeTrend = new Chart($('probeTrendChart'), {
           type: 'bar',
           data: {
@@ -430,17 +427,21 @@
             datasets: [{
               label: '端到端时延(ms)',
               data: recent.map(r => Number(r.latency_ms || 0)),
-              backgroundColor: 'rgba(77,187,122,.72)',
-              borderColor: '#4dbb7a',
+              backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
+              borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
               borderWidth: 1,
               borderRadius: 8,
             }]
           },
           options: chartOptions({
             plugins: {
+              legend: { display: false },
               tooltip: {
                 callbacks: {
-                  afterLabel: () => '结果: 成功'
+                  afterLabel: (ctx) => {
+                    const r = recent[ctx.dataIndex] || {};
+                    return [`结果: ${r.ok ? '成功' : '失败'}`, `任务: ${r.task_name || '-'}`, `消息: ${r.message || '-'}`];
+                  }
                 }
               }
             }
@@ -450,10 +451,11 @@
     }
 
     function taskLabel(task) {
-      return `任务${task.id}`;
+      return task.task_name || `任务${task.id}`;
     }
     function taskStatus(task) {
-      return task.timer ? '运行中' : '已停止';
+      if (task.running) return '拨测中';
+      return task.thread_alive === false ? '已停止' : '运行中';
     }
     function renderProbeTasks() {
       if (!has('probeTaskTable')) return;
@@ -462,38 +464,22 @@
         <tr>
           <td>${esc(taskLabel(task))}</td><td>${esc(task.target)}</td><td>${esc(task.model)}</td><td>${esc(task.mode)}</td><td>${esc(task.interval_sec)}</td>
           <td>${esc(taskStatus(task))}</td><td>${esc(task.last_message || '-')}</td>
-          <td><button type="button" data-task-action="toggle" data-task-id="${task.id}">${task.timer ? '停止' : '启动'}</button><button type="button" class="warn" data-task-action="delete" data-task-id="${task.id}">删除</button></td>
+          <td><button type="button" data-task-action="toggle" data-task-id="${task.id}">${task.thread_alive === false ? '启动' : '停止'}</button><button type="button" class="warn" data-task-action="delete" data-task-id="${task.id}">删除</button></td>
         </tr>`).join('') || '<tr><td colspan="8" class="subtle">暂无周期拨测任务</td></tr>';
       tbody.querySelectorAll('button[data-task-action]').forEach(btn => {
-        btn.onclick = () => {
+        btn.onclick = async () => {
           const id = Number(btn.getAttribute('data-task-id'));
           const task = llmProbeTasks.find(t => t.id === id);
           if (!task) return;
           if (btn.getAttribute('data-task-action') === 'toggle') {
-            task.timer ? stopProbeTask(task) : startProbeTask(task);
+            const action = task.thread_alive === false ? 'start' : 'stop';
+            await fetch(`/api/probe/tasks/${id}/${action}`, { method: 'POST' });
           } else {
-            stopProbeTask(task);
-            llmProbeTasks = llmProbeTasks.filter(t => t.id !== id);
-            renderProbeTasks();
+            await fetch(`/api/probe/tasks/${id}`, { method: 'DELETE' });
           }
+          await fetchProbeState();
         };
       });
-    }
-    function formDataFromTask(task) {
-      const fd = new FormData();
-      ['target', 'model', 'mode', 'api_key', 'question', 'timeout_sec'].forEach(k => fd.set(k, task[k] || ''));
-      return fd;
-    }
-    function stopProbeTask(task) {
-      if (task.timer) clearInterval(task.timer);
-      task.timer = null;
-      renderProbeTasks();
-    }
-    function startProbeTask(task) {
-      stopProbeTask(task);
-      runLlmProbe('周期', task);
-      task.timer = setInterval(() => runLlmProbe('周期', task), Math.max(5, Number(task.interval_sec || 60)) * 1000);
-      renderProbeTasks();
     }
 
     function renderTopology() {
@@ -911,14 +897,13 @@
     if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
     if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
 
-    async function runLlmProbe(trigger = '单次', task = null) {
-      const busyKey = task ? `task-${task.id}` : 'single';
+    async function runLlmProbe(trigger = '单次') {
+      const busyKey = 'single';
       if (!has('llmProbeForm') || llmProbeBusy.has(busyKey)) return;
       llmProbeBusy.add(busyKey);
-      const form = $('llmProbeForm');
-      const fd = task ? formDataFromTask(task) : new FormData(form);
-      const isSingle = trigger === '单次';
-      if (isSingle && has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
+      const fd = new FormData($('llmProbeForm'));
+      fd.set('trigger', trigger);
+      if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
       try {
         const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
         const data = await resp.json();
@@ -936,86 +921,44 @@
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
         if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
-        addProbeRecord({
-          time: new Date().toLocaleString('zh-CN', { hour12: false }),
-          task_id: task?.id || null,
-          task_name: task ? taskLabel(task) : '单次',
-          trigger,
-          target: String(fd.get('target') || '').trim(),
-          model: String(fd.get('model') || '').trim(),
-          mode,
-          ok: Boolean(data.ok),
-          status_code: data.status_code ?? null,
-          latency_ms: data.latency_ms ?? null,
-          ttfb_ms: data.ttfb_ms ?? null,
-          ttft_ms: data.ttft_ms ?? null,
-          message: data.message || ''
-        });
-        if (task) { task.last_message = data.ok ? `成功 ${num1(data.latency_ms)}ms` : (data.message || '失败'); renderProbeTasks(); }
         $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
+        await fetchProbeState();
       } catch (err) {
-        const record = {
-          time: new Date().toLocaleString('zh-CN', { hour12: false }),
-          task_id: task?.id || null,
-          task_name: task ? taskLabel(task) : '单次',
-          trigger,
-          target: String(fd.get('target') || '').trim(),
-          model: String(fd.get('model') || '').trim(),
-          mode: String(fd.get('mode') || 'standard'),
-          ok: false,
-          status_code: null,
-          latency_ms: null,
-          ttfb_ms: null,
-          ttft_ms: null,
-          message: err.message || String(err)
-        };
-        addProbeRecord(record);
-        if (has('llmProbeResultText')) $('llmProbeResultText').textContent = `拨测异常: ${record.message}`;
-        if (task) { task.last_message = record.message; renderProbeTasks(); }
+        if (has('llmProbeResultText')) $('llmProbeResultText').textContent = `拨测异常: ${err.message || err}`;
         $('status').textContent = 'LLM 拨测异常。';
       } finally {
         llmProbeBusy.delete(busyKey);
-        if (isSingle && has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = false; $('llmProbeSendBtn').textContent = '单次拨测'; }
+        if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = false; $('llmProbeSendBtn').textContent = '单次拨测'; }
       }
     }
 
     if (has('llmProbeForm')) {
-      renderProbeRecords();
-      renderProbeTasks();
+      fetchProbeState();
+      window.setInterval(fetchProbeState, 3000);
       $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
-      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = () => {
+      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
         const fd = new FormData($('llmProbeForm'));
         const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
-        const task = {
-          id: llmProbeTaskSeq++,
-          target: String(fd.get('target') || '').trim(),
-          model: String(fd.get('model') || '').trim(),
-          mode: String(fd.get('mode') || 'standard'),
-          api_key: String(fd.get('api_key') || '').trim(),
-          question: String(fd.get('question') || '').trim(),
-          timeout_sec: String(fd.get('timeout_sec') || '20'),
-          interval_sec: sec,
-          last_message: '-',
-          timer: null,
-        };
-        llmProbeTasks.push(task);
-        startProbeTask(task);
-        $('status').textContent = `已添加 ${taskLabel(task)}，每 ${sec} 秒拨测一次。`;
+        fd.set('schedule_interval_sec', String(sec));
+        const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
+        const data = await resp.json();
+        await fetchProbeState();
+        $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
       };
-      if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = () => {
-        llmProbeTasks.forEach(stopProbeTask);
+      if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
+        await Promise.all(llmProbeTasks.map(task => fetch(`/api/probe/tasks/${task.id}/stop`, { method: 'POST' })));
+        await fetchProbeState();
         $('status').textContent = '所有 LLM 周期拨测已停止。';
       };
-      if (has('clearProbeTasks')) $('clearProbeTasks').onclick = () => {
-        llmProbeTasks.forEach(stopProbeTask);
-        llmProbeTasks = [];
-        renderProbeTasks();
-        $('status').textContent = '周期拨测任务已清空。';
+      if (has('clearProbeTasks')) $('clearProbeTasks').onclick = async () => {
+        await fetch('/api/probe/tasks/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = '周期拨测任务已清空，任务序号已重置。';
       };
-      if (has('clearProbeRecords')) $('clearProbeRecords').onclick = () => {
-        saveProbeRecords([]);
-        renderProbeRecords();
-        $('status').textContent = '拨测记录已清空。';
+      if (has('clearProbeRecords')) $('clearProbeRecords').onclick = async () => {
+        await fetch('/api/probe/records/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
     }
 
