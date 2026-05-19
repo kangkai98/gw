@@ -281,6 +281,11 @@
       </section>
 
       <section class="glass panel chart-panel probe-chart-panel">
+        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">按任务分开展示成功和失败拨测，柱高为端到端时延</span></div>
+        <div id="probeTrendCharts" class="probe-chart-grid"></div>
+      </section>
+
+      <section class="glass panel chart-panel probe-chart-panel">
         <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">展示成功和失败拨测，柱高为端到端时延</span></div>
         <canvas id="probeTrendChart"></canvas>
       </section>
@@ -417,36 +422,54 @@
             <td>${esc(r.status_code)}</td><td>${num1(r.latency_ms)}</td><td>${num1(r.ttfb_ms)}</td><td>${num1(r.ttft_ms)}</td><td>${esc(r.message)}</td>
           </tr>`).join('') || '<tr><td colspan="12" class="subtle">暂无拨测记录</td></tr>';
       }
-      if (has('probeTrendChart')) {
-        charts.probeTrend?.destroy?.();
-        const recent = records.slice(0, 50).reverse();
-        charts.probeTrend = new Chart($('probeTrendChart'), {
-          type: 'bar',
-          data: {
-            labels: recent.map(r => String(r.time || '').slice(11, 19)),
-            datasets: [{
-              label: '端到端时延(ms)',
-              data: recent.map(r => Number(r.latency_ms || 0)),
-              backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
-              borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
-              borderWidth: 1,
-              borderRadius: 8,
-            }]
-          },
-          options: chartOptions({
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  afterLabel: (ctx) => {
-                    const r = recent[ctx.dataIndex] || {};
-                    return [`结果: ${r.ok ? '成功' : '失败'}`, `任务: ${r.task_name || '-'}`, `消息: ${r.message || '-'}`];
+      if (has('probeTrendCharts')) {
+        Object.keys(charts).filter(k => k.startsWith('probeTrend:')).forEach((key) => { charts[key]?.destroy?.(); delete charts[key]; });
+        const container = $('probeTrendCharts');
+        const byTask = new Map();
+        records.forEach((record) => {
+          const taskKey = record.task_id === null || record.task_id === undefined ? 'single' : `task-${record.task_id}`;
+          if (!byTask.has(taskKey)) byTask.set(taskKey, { title: record.task_name || '单次', records: [] });
+          byTask.get(taskKey).records.push(record);
+        });
+        if (!byTask.size) {
+          container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
+        } else {
+          container.innerHTML = Array.from(byTask.entries()).map(([key, group]) => `
+            <section class="probe-task-chart">
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          Array.from(byTask.entries()).forEach(([key, group]) => {
+            const recent = group.records.slice(0, 50).reverse();
+            charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
+              type: 'bar',
+              data: {
+                labels: recent.map(r => String(r.time || '').slice(11, 19)),
+                datasets: [{
+                  label: '端到端时延(ms)',
+                  data: recent.map(r => Number(r.latency_ms || 0)),
+                  backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
+                  borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
+                  borderWidth: 1,
+                  borderRadius: 8,
+                }]
+              },
+              options: chartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    callbacks: {
+                      afterLabel: (ctx) => {
+                        const r = recent[ctx.dataIndex] || {};
+                        return [`结果: ${r.ok ? '成功' : '失败'}`, `任务: ${r.task_name || '-'}`, `消息: ${r.message || '-'}`];
+                      }
+                    }
                   }
                 }
-              }
-            }
-          })
-        });
+              })
+            });
+          });
+        }
       }
     }
 

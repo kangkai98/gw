@@ -137,7 +137,10 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .table-scroll { overflow: auto; max-height: 360px; border-radius: 16px; }
 #probeRecordTable { min-width: 1060px; }
 #probeTaskTable { min-width: 920px; }
-#probeTrendChart { min-height: 300px; }
+.probe-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.probe-task-chart { min-height: 300px; border: 1px solid rgba(86,112,159,.14); border-radius: 16px; background: rgba(255,255,255,.55); padding: 12px; }
+.probe-task-chart h3 { margin: 0 0 8px; font-size: 14px; color: #2d4778; }
+.probe-task-chart canvas { min-height: 250px; }
 .topology-panel { grid-column: 1 / -1; }
 .topology-graph-fancy { position: relative; margin-top: 14px; min-height: 320px; border-radius: 18px; border: 1px solid rgba(86,112,159,.14); background: radial-gradient(120% 120% at 0% 0%, rgba(122,162,255,.16), rgba(255,255,255,.55)); padding: 18px; overflow: hidden; }
 .topo-link { position: absolute; height: 2px; background: linear-gradient(90deg, #7aa2ff, #67d4b6); top: 50%; transform: translateY(-50%); box-shadow: 0 0 0 2px rgba(122,162,255,.08); }
