@@ -614,9 +614,12 @@ def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) ->
         }
     return result_holder.get("result") or {"ok": False, "availability": "不可用", "message": "拨测失败"}
 def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
+    started_at = _probe_now_text()
     with _probe_lock:
         task = _probe_tasks.get(task_id)
         if not task:
+            return
+        if task.running:
             return
         params = dict(task.params)
         task.running = True
@@ -625,7 +628,7 @@ def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
     timeout_value = max(2.0, min(float(params.get("timeout_sec") or 20.0), 90.0))
     result = _run_llm_probe_with_deadline(params, timeout_value)
     record = {
-        "time": _probe_now_text(),
+        "time": started_at,
         "task_id": task_id,
         "task_name": f"任务{task_id}",
         "trigger": trigger,

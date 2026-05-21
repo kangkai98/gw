@@ -430,13 +430,12 @@
           container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
         } else {
           const groups = Array.from(byTask.entries());
-          const first = groups[0];
-          container.innerHTML = `
+          container.innerHTML = groups.map(([key, group]) => `
             <section class="probe-task-chart">
-              <h3>${esc(first[1].title)}</h3>
-              <canvas id="probeTrendChart-${esc(first[0])}"></canvas>
-            </section>`;
-          [first].forEach(([key, group]) => {
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          groups.forEach(([key, group]) => {
             const recent = group.records.slice(0, 50).reverse();
             const failHeightSec = 0.3;
             charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
@@ -983,6 +982,13 @@
         await fetchProbeState();
         $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
+      window.setInterval(async () => {
+        try {
+          await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 5000);
     }
 
     if (has('detailQueryForm')) {
