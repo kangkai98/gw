@@ -585,6 +585,34 @@ def api_probe_llm(
     return result
 
 
+
+
+def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) -> dict[str, Any]:
+    result_holder: dict[str, Any] = {}
+
+    def _target() -> None:
+        result_holder["result"] = _run_llm_probe(
+            params.get("target", ""),
+            params.get("api_key", ""),
+            params.get("model", "gpt-4o-mini"),
+            params.get("question", "你好"),
+            params.get("mode", "standard"),
+            float(params.get("timeout_sec") or deadline_sec),
+        )
+
+    t0 = time.perf_counter()
+    worker = threading.Thread(target=_target, daemon=True)
+    worker.start()
+    worker.join(timeout=max(1.0, deadline_sec + 0.5))
+    if worker.is_alive():
+        return {
+            "ok": False,
+            "availability": "不可用",
+            "message": f"拨测超时({deadline_sec:.0f}s)",
+            "status_code": None,
+            "latency_ms": round((time.perf_counter() - t0) * 1000, 1),
+        }
+    return result_holder.get("result") or {"ok": False, "availability": "不可用", "message": "拨测失败"}
 def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
     with _probe_lock:
         task = _probe_tasks.get(task_id)
@@ -594,14 +622,8 @@ def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
         task.running = True
         task.last_message = "拨测中..."
 
-    result = _run_llm_probe(
-        params.get("target", ""),
-        params.get("api_key", ""),
-        params.get("model", "gpt-4o-mini"),
-        params.get("question", "你好"),
-        params.get("mode", "standard"),
-        float(params.get("timeout_sec") or 20.0),
-    )
+    timeout_value = max(2.0, min(float(params.get("timeout_sec") or 20.0), 90.0))
+    result = _run_llm_probe_with_deadline(params, timeout_value)
     record = {
         "time": _probe_now_text(),
         "task_id": task_id,
@@ -637,6 +659,7 @@ def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
 
 
 def _probe_task_loop(task_id: int) -> None:
+    next_fire = time.monotonic()
     while True:
         with _probe_lock:
             task = _probe_tasks.get(task_id)
@@ -644,9 +667,13 @@ def _probe_task_loop(task_id: int) -> None:
                 return
             interval_sec = max(5, int(task.interval_sec or 60))
             stop_event = task.stop_event
-        _run_probe_task_once(task_id)
-        if stop_event.wait(interval_sec):
+        now = time.monotonic()
+        if now < next_fire and stop_event.wait(next_fire - now):
             return
+        threading.Thread(target=_run_probe_task_once, args=(task_id,), daemon=True).start()
+        next_fire += interval_sec
+        if next_fire < time.monotonic():
+            next_fire = time.monotonic() + interval_sec
 
 
 def _start_probe_task_locked(task: ProbeTask) -> None:

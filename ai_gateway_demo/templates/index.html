@@ -284,11 +284,6 @@
         <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
         <div id="probeTrendCharts" class="probe-chart-grid"></div>
       </section>
-
-      <section class="glass panel chart-panel probe-chart-panel">
-        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
-        <canvas id="probeTrendChart"></canvas>
-      </section>
     </section>
     {% endif %}
 
@@ -434,12 +429,14 @@
         if (!byTask.size) {
           container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
         } else {
-          container.innerHTML = Array.from(byTask.entries()).map(([key, group]) => `
+          const groups = Array.from(byTask.entries());
+          const first = groups[0];
+          container.innerHTML = `
             <section class="probe-task-chart">
-              <h3>${esc(group.title)}</h3>
-              <canvas id="probeTrendChart-${esc(key)}"></canvas>
-            </section>`).join('');
-          Array.from(byTask.entries()).forEach(([key, group]) => {
+              <h3>${esc(first[1].title)}</h3>
+              <canvas id="probeTrendChart-${esc(first[0])}"></canvas>
+            </section>`;
+          [first].forEach(([key, group]) => {
             const recent = group.records.slice(0, 50).reverse();
             const failHeightSec = 0.3;
             charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
