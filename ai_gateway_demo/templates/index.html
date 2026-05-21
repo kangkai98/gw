@@ -126,10 +126,13 @@
     <section class="config-grid">
       <section class="glass panel" id="onlineCapturePanel">
         <h2>在线监听</h2>
-        <p class="subtle">持续监听网卡流量，默认每 60 秒切分一个窗口并自动分析入库。</p>
+        <p class="subtle">持续监听网卡流量，按周期读入 pcap，对 FIN/RST、空闲超时或超过最长缓存时长的流回溯识别入库，并自动清理 pcap。</p>
         <form id="captureForm" class="inline-config-form panel-content-gap">
-          <input aria-label="监听网卡" name="interface" placeholder="网卡名，如 eth0 / en0 / any" required />
-          <input aria-label="分析周期" name="interval_sec" type="number" min="5" step="1" value="60" placeholder="周期秒数" required />
+          <input aria-label="监听网卡" name="interface" value="eth0" placeholder="网卡名，如 eth0 / en0 / any" required />
+          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="周期秒数" required />
+          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="idle timeout 秒" required />
+          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required />
+          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required />
           <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" />
           <button aria-label="开始在线监听" type="submit">开始监听</button>
           <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
@@ -138,7 +141,7 @@
       </section>
 
       <section class="glass panel" id="upload">
-        <h2>上传抓包文件</h2>
+        <h2>离线抓包上传</h2>
         <form id="uploadForm" class="panel-content-gap">
           <label class="upload-shell" aria-label="PCAP 文件">
             <input id="pcapFile" name="file" type="file" accept=".pcap,.pcapng" required />
@@ -173,18 +176,6 @@
         </table>
       </section>
 
-      <section class="glass panel" id="mcpPanel">
-        <h2>MCP配置</h2>
-        <p class="subtle">确认配置前会先进行连通性探测。</p>
-        <form id="mcpForm" class="inline-config-form inline-config-form-compact">
-          <input name="mcp_name" placeholder="MCP名称，如 mcp-tool" required />
-          <input name="mcp_target" placeholder="目标地址，如 10.0.0.9:9000" required />
-          <button type="submit">确认配置</button>
-          <button id="clearMcpCfg" type="button" class="warn">清空MCP</button>
-        </form>
-        <p id="mcpStatus" class="subtle"></p>
-      </section>
-
       <section class="glass panel" id="healthCfgPanel">
         <h2>健康状态阈值配置</h2>
         <p class="subtle">基于 TTFT / TPOT 阈值判定健康、关注、告警。</p>
@@ -216,10 +207,10 @@
     {% endif %}
 
     {% if page == 'probe' %}
-    <section class="config-grid">
-      <section class="glass panel">
+    <section class="config-grid probe-grid">
+      <section class="glass panel probe-main-panel">
         <h2>大模型API（OpenAI格式）</h2>
-        <p class="subtle">支持标准与流式拨测。标准返回可用性+Latency，流式额外返回TTFB/TTFT。</p>
+        <p class="subtle">支持单次拨测和服务端周期性拨测，切换到配置页也不会停止。标准返回可用性+端到端时延，流式额外返回 TTFB/TTFT。</p>
         <form id="llmProbeForm" class="probe-form panel-content-gap">
           <label class="filter-item">
             <span>服务URL</span>
@@ -246,9 +237,16 @@
           </label>
           <label class="filter-item">
             <span>超时(秒)</span>
-            <input name="timeout_sec" type="number" min="2" max="90" step="1" value="20" />
+            <input name="timeout_sec" type="number" min="2" max="90" step="1" value="30" />
           </label>
-          <div class="actions probe-full"><button id="llmProbeSendBtn" type="submit">发送LLM拨测</button></div>
+          <label class="filter-item">
+            <span>周期拨测(秒)</span>
+            <input name="schedule_interval_sec" type="number" min="5" max="86400" step="1" value="30" />
+          </label>
+          <div class="actions probe-full">
+            <button id="llmProbeSendBtn" type="submit">单次拨测</button>
+            <button id="llmProbeStartBtn" type="button">添加周期任务</button>
+          </div>
         </form>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
@@ -256,42 +254,35 @@
         </div>
       </section>
 
-      <section class="glass panel">
-        <h2>MCP端点拨测</h2>
-        <p class="subtle">覆盖核心JSON-RPC方法：initialize、tools/list、resources/list、prompts/list，并支持自定义方法。</p>
-        <form id="mcpProbeForm" class="probe-form panel-content-gap">
-          <label class="filter-item">
-            <span>MCP Endpoint</span>
-            <input name="endpoint" placeholder="http://127.0.0.1:9000/mcp" required />
-          </label>
-          <label class="filter-item">
-            <span>操作</span>
-            <select name="operation" id="mcpProbeOperation">
-              <option value="initialize">initialize</option>
-              <option value="tools_list">tools/list</option>
-              <option value="resources_list">resources/list</option>
-              <option value="prompts_list">prompts/list</option>
-              <option value="custom">自定义方法</option>
-            </select>
-          </label>
-          <label class="filter-item">
-            <span>自定义方法</span>
-            <input name="custom_method" id="mcpCustomMethod" placeholder="例如 sampling/createMessage" disabled />
-          </label>
-          <label class="filter-item">
-            <span>API Key</span>
-            <input name="api_key" placeholder="可选，用于Authorization" />
-          </label>
-          <label class="filter-item">
-            <span>超时(秒)</span>
-            <input name="timeout_sec" type="number" min="1" max="60" step="1" value="10" />
-          </label>
-          <div class="actions probe-full"><button id="mcpProbeSendBtn" type="submit">发送MCP拨测</button></div>
-        </form>
-        <div id="mcpProbeResult" class="probe-response">
-          <div class="probe-response-head">MCP拨测结果</div>
-          <pre id="mcpProbeResultText">暂未发送请求。</pre>
+      <section class="glass panel probe-task-panel">
+        <div class="panel-head">
+          <h2>周期拨测任务列表</h2>
+          <button id="clearProbeTasks" type="button" class="ghost-btn">清空任务</button>
         </div>
+        <div class="table-scroll probe-task-scroll">
+          <table id="probeTaskTable">
+            <thead><tr><th>任务</th><th>目标</th><th>模型</th><th>模式</th><th>周期(s)</th><th>状态</th><th>最近结果</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="glass panel probe-record-panel">
+        <div class="panel-head">
+          <h2>拨测任务详细记录</h2>
+          <button id="clearProbeRecords" type="button" class="ghost-btn">清空记录</button>
+        </div>
+        <div class="table-scroll">
+          <table id="probeRecordTable">
+            <thead><tr><th>时间</th><th>任务</th><th>触发</th><th>目标</th><th>模型</th><th>模式</th><th>结果</th><th>状态码</th><th>端到端(s)</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="glass panel chart-panel probe-chart-panel">
+        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
+        <div id="probeTrendCharts" class="probe-chart-grid"></div>
       </section>
     </section>
     {% endif %}
@@ -383,6 +374,7 @@
 
     function $(id) { return document.getElementById(id); }
     function has(id) { return !!$(id); }
+    function esc(v) { return String(v ?? '-').replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch])); }
     function destroyAllCharts() { Object.values(charts).forEach(c => c?.destroy?.()); }
     function flowIps(flowKey) { if (!flowKey || !flowKey.includes('-')) return '-'; const [a, b] = flowKey.split('-'); return `${a} ↔ ${b}`; }
     function parseFlow(flowKey) {
@@ -401,21 +393,127 @@
     const DEFAULT_HEALTH_CFG = { ttft_warn: 1800, ttft_alert: 3500, tpot_warn: 90, tpot_alert: 180 };
     function getHealthCfg() { const cfg = loadCfg('health_cfg') || {}; return { ...DEFAULT_HEALTH_CFG, ...cfg }; }
 
+    let llmProbeTasks = [];
+    let llmProbeRecords = [];
+    let llmProbeBusy = new Set();
+
+    async function fetchProbeState() {
+      if (!has('probeTaskTable') && !has('probeRecordTable')) return;
+      const resp = await fetch('/api/probe/tasks');
+      const data = await resp.json();
+      llmProbeTasks = data.items || [];
+      llmProbeRecords = data.records || [];
+      renderProbeTasks();
+      renderProbeRecords();
+    }
+    function renderProbeRecords() {
+      const records = llmProbeRecords || [];
+      if (has('probeRecordTable')) {
+        const tbody = $('probeRecordTable').querySelector('tbody');
+        tbody.innerHTML = records.slice(0, 100).map(r => `
+          <tr>
+            <td>${esc(r.time)}</td><td>${esc(r.task_name)}</td><td>${esc(r.trigger)}</td><td>${esc(r.target)}</td><td>${esc(r.model)}</td><td>${esc(r.mode)}</td>
+            <td><span class="status-pill"><span class="light ${r.ok ? 'green' : 'red'}"></span>${r.ok ? '成功' : '失败'}</span></td>
+            <td>${esc(r.status_code)}</td><td>${num1(Number(r.latency_ms || 0) / 1000)}</td><td>${esc(r.message)}</td>
+          </tr>`).join('') || '<tr><td colspan="10" class="subtle">暂无拨测记录</td></tr>';
+      }
+      if (has('probeTrendCharts')) {
+        Object.keys(charts).filter(k => k.startsWith('probeTrend:')).forEach((key) => { charts[key]?.destroy?.(); delete charts[key]; });
+        const container = $('probeTrendCharts');
+        const byTask = new Map();
+        records.forEach((record) => {
+          const taskKey = record.task_id === null || record.task_id === undefined ? 'single' : `task-${record.task_id}`;
+          if (!byTask.has(taskKey)) byTask.set(taskKey, { title: record.task_name || '单次', records: [] });
+          byTask.get(taskKey).records.push(record);
+        });
+        if (!byTask.size) {
+          container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
+        } else {
+          container.innerHTML = Array.from(byTask.entries()).map(([key, group]) => `
+            <section class="probe-task-chart">
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          Array.from(byTask.entries()).forEach(([key, group]) => {
+            const recent = group.records.slice(0, 50).reverse();
+            const failHeightSec = 0.3;
+            charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
+              type: 'bar',
+              data: {
+                labels: recent.map(r => String(r.time || '').slice(11, 19)),
+                datasets: [{
+                  label: '端到端时延(s)',
+                  data: recent.map(r => r.ok ? (Number(r.latency_ms || 0) / 1000) : failHeightSec),
+                  backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.92)'),
+                  borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
+                  borderWidth: 1,
+                  borderRadius: 8,
+                }]
+              },
+              options: chartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    callbacks: {
+                      afterLabel: (ctx) => {
+                        const r = recent[ctx.dataIndex] || {};
+                        return [`结果: ${r.ok ? '成功' : '失败'}`, `消息: ${r.message || '-'}`];
+                      }
+                    }
+                  }
+                },
+                scales: {
+                  y: { beginAtZero: true, ticks: { callback: (v) => `${v}s` } }
+                }
+              })
+            });
+          });
+        }
+      }
+    }
+
+    function taskLabel(task) {
+      return task.task_name || `任务${task.id}`;
+    }
+    function taskStatus(task) {
+      if (task.running) return '拨测中';
+      return task.thread_alive === false ? '已停止' : '运行中';
+    }
+    function renderProbeTasks() {
+      if (!has('probeTaskTable')) return;
+      const tbody = $('probeTaskTable').querySelector('tbody');
+      tbody.innerHTML = llmProbeTasks.map(task => `
+        <tr>
+          <td>${esc(taskLabel(task))}</td><td>${esc(task.target)}</td><td>${esc(task.model)}</td><td>${esc(task.mode)}</td><td>${esc(task.interval_sec)}</td>
+          <td>${esc(taskStatus(task))}</td><td>${esc(task.last_message || '-')}</td>
+          <td><button type="button" data-task-action="toggle" data-task-id="${task.id}">${task.thread_alive === false ? '启动' : '停止'}</button><button type="button" class="warn" data-task-action="delete" data-task-id="${task.id}">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="8" class="subtle">暂无周期拨测任务</td></tr>';
+      tbody.querySelectorAll('button[data-task-action]').forEach(btn => {
+        btn.onclick = async () => {
+          const id = Number(btn.getAttribute('data-task-id'));
+          const task = llmProbeTasks.find(t => t.id === id);
+          if (!task) return;
+          if (btn.getAttribute('data-task-action') === 'toggle') {
+            const action = task.thread_alive === false ? 'start' : 'stop';
+            await fetch(`/api/probe/tasks/${id}/${action}`, { method: 'POST' });
+          } else {
+            await fetch(`/api/probe/tasks/${id}`, { method: 'DELETE' });
+          }
+          await fetchProbeState();
+        };
+      });
+    }
+
     function renderTopology() {
       if (!has('topoRag')) return;
       const rag = loadCfg('rag_cfg');
-      const mcp = loadCfg('mcp_cfg');
       const llm = loadCfg('llm_cfg');
       $('topoRag').textContent = rag ? `${rag.name} @ ${rag.target}` : '未配置';
-      $('topoMcp').textContent = mcp ? `${mcp.name} @ ${mcp.target}` : '未配置';
       if (has('topoLlm')) $('topoLlm').textContent = llm ? `${llm.name} @ ${llm.target}` : '未配置';
       if (has('ragStatus')) $('ragStatus').textContent = rag ? `已配置：${rag.name} (${rag.target})` : '';
-      if (has('mcpStatus')) $('mcpStatus').textContent = mcp ? `已配置：${mcp.name} (${mcp.target})` : '';
       show('nodeRag', !!rag); show('lineGwRag', !!rag);
-      show('nodeMcp', !!mcp); show('lineGwMcp', !!mcp);
       show('nodeLlm', !!llm); show('lineGwLlm', !!llm);
       if (has('latGwRag')) $('latGwRag').textContent = rag?.latency_ms ? `${num1(rag.latency_ms)} ms` : '-';
-      if (has('latGwMcp')) $('latGwMcp').textContent = mcp?.latency_ms ? `${num1(mcp.latency_ms)} ms` : '-';
       if (has('latGwLlm')) $('latGwLlm').textContent = llm?.latency_ms ? `${num1(llm.latency_ms)} ms` : '-';
     }
 
@@ -689,7 +787,9 @@
       const state = capture?.running ? '运行中' : '已停止';
       const lines = [
         `状态：${state}；${capture?.message || '未启动在线监听'}`,
-        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；idle：${capture?.idle_timeout_sec || 120}s；最长缓存：${capture?.max_flow_duration_sec ?? 300}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `pcap保留：${capture?.pcap_retention_sec ?? 0}s；最近清理：${capture?.last_deleted_pcaps ?? 0} 个；累计清理：${capture?.total_deleted_pcaps ?? 0} 个`,
+        `缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包；就绪流：${capture?.last_ready_flows ?? 0}`,
         `最近窗口：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
         `累计：${capture?.total_windows ?? 0} 个窗口 / ${capture?.total_inserted ?? 0} 条入库`,
       ];
@@ -819,72 +919,69 @@
     if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
     if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
 
-    if (has('mcpForm')) $('mcpForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      const name = String(fd.get('mcp_name') || '').trim();
-      const target = String(fd.get('mcp_target') || '').trim();
-      const t0 = performance.now();
-      const result = await checkConnectivity(target);
-      const latencyMs = result.ok ? (performance.now() - t0) : null;
-      $('mcpStatus').textContent = result.message;
-      if (result.ok) {
-        saveCfg('mcp_cfg', { name, target, latency_ms: latencyMs });
-        renderTopology();
-      }
-      $('status').textContent = result.ok ? 'MCP 配置确认成功。' : 'MCP 配置确认失败。';
-    };
-
-    if (has('clearMcpCfg')) $('clearMcpCfg').onclick = () => { clearCfgLocal('mcp_cfg'); renderTopology(); $('status').textContent = 'MCP配置已清空。'; };
-
-    if (has('llmProbeForm')) $('llmProbeForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
+    async function runLlmProbe(trigger = '单次') {
+      const busyKey = 'single';
+      if (!has('llmProbeForm') || llmProbeBusy.has(busyKey)) return;
+      llmProbeBusy.add(busyKey);
+      const fd = new FormData($('llmProbeForm'));
+      fd.set('trigger', trigger);
       if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
-      const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
-      const data = await resp.json();
-      const lines = [
-        `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
-        `状态码: ${data.status_code ?? '-'}`,
-        `Latency(ms): ${num1(data.latency_ms)}`,
-      ];
-      if ((fd.get('mode') || '') === 'stream') {
-        lines.push(`TTFB(ms): ${num1(data.ttfb_ms)}`);
-        lines.push(`TTFT(ms): ${num1(data.ttft_ms)}`);
+      try {
+        const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
+        const data = await resp.json();
+        const mode = String(fd.get('mode') || 'standard');
+        const lines = [
+          `触发方式: ${trigger}`,
+          `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
+          `状态码: ${data.status_code ?? '-'}`,
+          `Latency(ms): ${num1(data.latency_ms)}`,
+        ];
+        if (mode === 'stream') {
+          lines.push(`TTFB(ms): ${num1(data.ttfb_ms)}`);
+          lines.push(`TTFT(ms): ${num1(data.ttft_ms)}`);
+        }
+        lines.push(`消息: ${data.message || '-'}`);
+        if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
+        if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
+        $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
+        await fetchProbeState();
+      } catch (err) {
+        if (has('llmProbeResultText')) $('llmProbeResultText').textContent = `拨测异常: ${err.message || err}`;
+        $('status').textContent = 'LLM 拨测异常。';
+      } finally {
+        llmProbeBusy.delete(busyKey);
+        if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = false; $('llmProbeSendBtn').textContent = '单次拨测'; }
       }
-      lines.push(`消息: ${data.message || '-'}`);
-      if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
-      if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
-      $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
-      if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = false; $('llmProbeSendBtn').textContent = '发送LLM拨测'; }
-    };
-
-    if (has('mcpProbeOperation') && has('mcpCustomMethod')) {
-      $('mcpProbeOperation').onchange = () => {
-        const custom = $('mcpProbeOperation').value === 'custom';
-        $('mcpCustomMethod').disabled = !custom;
-      };
     }
 
-    if (has('mcpProbeForm')) $('mcpProbeForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(e.target);
-      if (has('mcpProbeSendBtn')) { $('mcpProbeSendBtn').disabled = true; $('mcpProbeSendBtn').textContent = '拨测中...'; }
-      const resp = await fetch('/api/probe/mcp', { method: 'POST', body: fd });
-      const data = await resp.json();
-      const lines = [
-        `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
-        `操作: ${data.operation || '-'}`,
-        `方法: ${data.method || '-'}`,
-        `状态码: ${data.status_code ?? '-'}`,
-        `Latency(ms): ${num1(data.latency_ms)}`,
-        `消息: ${data.message || '-'}`,
-      ];
-      if (data.result_preview) lines.push(`返回片段: ${data.result_preview}`);
-      if (has('mcpProbeResultText')) $('mcpProbeResultText').textContent = lines.join('\n');
-      $('status').textContent = data.ok ? 'MCP 拨测完成。' : 'MCP 拨测失败。';
-      if (has('mcpProbeSendBtn')) { $('mcpProbeSendBtn').disabled = false; $('mcpProbeSendBtn').textContent = '发送MCP拨测'; }
-    };
+    if (has('llmProbeForm')) {
+      fetchProbeState();
+      $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
+      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
+        const fd = new FormData($('llmProbeForm'));
+        const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
+        fd.set('schedule_interval_sec', String(sec));
+        const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
+        const data = await resp.json();
+        await fetchProbeState();
+        $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
+      };
+      if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
+        await Promise.all(llmProbeTasks.map(task => fetch(`/api/probe/tasks/${task.id}/stop`, { method: 'POST' })));
+        await fetchProbeState();
+        $('status').textContent = '所有 LLM 周期拨测已停止。';
+      };
+      if (has('clearProbeTasks')) $('clearProbeTasks').onclick = async () => {
+        await fetch('/api/probe/tasks/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = '周期拨测任务已清空，任务序号已重置。';
+      };
+      if (has('clearProbeRecords')) $('clearProbeRecords').onclick = async () => {
+        await fetch('/api/probe/records/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
+      };
+    }
 
     if (has('detailQueryForm')) {
       const queryRun = async () => {

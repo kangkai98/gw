@@ -72,7 +72,6 @@ body {
 #upload { order: 1; }
 #healthCfgPanel { order: 2; }
 #selfHostedPanel { order: 3; }
-#mcpPanel { order: 4; }
 .panel-content-gap { margin-top: 14px; }
 
 .config-title { margin: 18px 0 10px; font-size: 17px; color: #2f4a7a; }
@@ -127,23 +126,31 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .progress-text { display: inline-block; margin-top: 8px; color: #52627e; font-size: 12px; font-weight: 540; }
 
 .status { margin-top: 8px; color: var(--muted); font-size: 14px; }
-.probe-form { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr); gap: 10px; align-items: end; }
-.probe-full { grid-column: 1 / -1; }
+.probe-form { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+.probe-full { grid-column: auto; }
 .probe-response { border: 1px solid rgba(86,112,159,.16); border-radius: 16px; background: linear-gradient(180deg, rgba(255,255,255,.78), rgba(246,250,255,.66)); overflow: hidden; }
 .probe-response-head { padding: 10px 12px; font-size: 12px; color: #4d6287; border-bottom: 1px solid rgba(86,112,159,.14); background: rgba(255,255,255,.58); }
 .probe-response pre { margin: 0; padding: 12px; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; line-height: 1.55; max-height: 360px; overflow: auto; }
+.probe-grid { grid-template-columns: minmax(0, 1fr); }
+.probe-main-panel { grid-column: auto; }
+.probe-record-panel, .probe-chart-panel { min-height: 360px; }
+.table-scroll { overflow: auto; max-height: 360px; border-radius: 16px; }
+#probeRecordTable { min-width: 1060px; }
+#probeTaskTable { min-width: 920px; }
+.probe-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.probe-task-chart { min-height: 300px; border: 1px solid rgba(86,112,159,.14); border-radius: 16px; background: rgba(255,255,255,.55); padding: 12px; }
+.probe-task-chart h3 { margin: 0 0 8px; font-size: 14px; color: #2d4778; }
+.probe-task-chart canvas { min-height: 250px; }
 .topology-panel { grid-column: 1 / -1; }
 .topology-graph-fancy { position: relative; margin-top: 14px; min-height: 320px; border-radius: 18px; border: 1px solid rgba(86,112,159,.14); background: radial-gradient(120% 120% at 0% 0%, rgba(122,162,255,.16), rgba(255,255,255,.55)); padding: 18px; overflow: hidden; }
 .topo-link { position: absolute; height: 2px; background: linear-gradient(90deg, #7aa2ff, #67d4b6); top: 50%; transform: translateY(-50%); box-shadow: 0 0 0 2px rgba(122,162,255,.08); }
 .topo-link-rag { left: 30%; top: 33%; width: 38%; transform: rotate(-26deg); transform-origin: left center; }
-.topo-link-mcp { left: 30%; top: 49%; width: 38%; transform: rotate(0deg); transform-origin: left center; }
 .topo-link-llm { left: 30%; top: 65%; width: 38%; transform: rotate(26deg); transform-origin: left center; }
 .topo-node { position: absolute; width: 24%; min-width: 180px; border-radius: 16px; border: 1px solid rgba(69,103,164,.2); background: rgba(255,255,255,.88); box-shadow: 0 10px 24px rgba(70,98,145,.14); padding: 14px; text-align: center; display: grid; gap: 6px; }
 .topo-node strong { font-size: 15px; color: #26447a; }
 .topo-node small { color: #5f6e87; font-size: 12px; word-break: break-word; }
 .topo-node-gw { left: 6%; top: 49%; transform: translateY(-50%); }
 .topo-node-rag { right: 8%; top: 8%; }
-.topo-node-mcp { right: 8%; top: 39%; }
 .topo-node-llm { right: 8%; top: 70%; }
 .topo-lat { position: absolute; top: -22px; right: 0; font-size: 11px; color: #4f607d; background: rgba(255,255,255,.82); border: 1px solid rgba(86,112,159,.16); padding: 2px 6px; border-radius: 999px; }
 .topo-hidden { display: none; }
