@@ -282,6 +282,11 @@
 
       <section class="glass panel chart-panel probe-chart-panel">
         <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
+        <div id="probeTrendCharts" class="probe-chart-grid"></div>
+      </section>
+
+      <section class="glass panel chart-panel probe-chart-panel">
+        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
         <canvas id="probeTrendChart"></canvas>
       </section>
     </section>
@@ -417,55 +422,58 @@
             <td>${esc(r.status_code)}</td><td>${num1(Number(r.latency_ms || 0) / 1000)}</td><td>${esc(r.message)}</td>
           </tr>`).join('') || '<tr><td colspan="10" class="subtle">暂无拨测记录</td></tr>';
       }
-      if (has('probeTrendChart')) {
-        charts.probeTrend?.destroy?.();
-        const recent = records.slice(0, 60).reverse();
-        const labels = recent.map(r => String(r.time || '').slice(11, 19));
-        const taskNames = Array.from(new Set(recent.map(r => String(r.task_name || '未命名任务'))));
-        const palette = ['#7aa2ff', '#67d4b6', '#ffc56e', '#d7b8ff', '#89d0ff', '#ff8fa6'];
-        const failHeightSec = 0.1;
-        const datasets = taskNames.map((taskName, idx) => ({
-          label: taskName,
-          data: recent.map((r) => {
-            if (String(r.task_name || '未命名任务') !== taskName) return null;
-            if (r.ok) return Number(r.latency_ms || 0) / 1000;
-            return failHeightSec;
-          }),
-          backgroundColor: recent.map((r) => {
-            if (String(r.task_name || '未命名任务') !== taskName) return 'rgba(0,0,0,0)';
-            return r.ok ? palette[idx % palette.length] : 'rgba(228,93,110,.9)';
-          }),
-          borderColor: recent.map((r) => {
-            if (String(r.task_name || '未命名任务') !== taskName) return 'rgba(0,0,0,0)';
-            return r.ok ? palette[idx % palette.length] : '#e45d6e';
-          }),
-          borderWidth: 1,
-          borderRadius: 6,
-        }));
-        charts.probeTrend = new Chart($('probeTrendChart'), {
-          type: 'bar',
-          data: { labels, datasets },
-          options: chartOptions({
-            plugins: {
-              legend: { display: true },
-              tooltip: {
-                callbacks: {
-                  label: (ctx) => `${ctx.dataset.label}: ${num1(ctx.raw)}s`,
-                  afterLabel: (ctx) => {
-                    const r = recent[ctx.dataIndex] || {};
-                    return [`结果: ${r.ok ? '成功' : '失败'}`, `消息: ${r.message || '-'}`];
-                  }
-                }
-              }
-            },
-            scales: {
-              y: {
-                beginAtZero: true,
-                ticks: { callback: (v) => `${v}s` }
-              }
-            }
-          })
+      if (has('probeTrendCharts')) {
+        Object.keys(charts).filter(k => k.startsWith('probeTrend:')).forEach((key) => { charts[key]?.destroy?.(); delete charts[key]; });
+        const container = $('probeTrendCharts');
+        const byTask = new Map();
+        records.forEach((record) => {
+          const taskKey = record.task_id === null || record.task_id === undefined ? 'single' : `task-${record.task_id}`;
+          if (!byTask.has(taskKey)) byTask.set(taskKey, { title: record.task_name || '单次', records: [] });
+          byTask.get(taskKey).records.push(record);
         });
+        if (!byTask.size) {
+          container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
+        } else {
+          container.innerHTML = Array.from(byTask.entries()).map(([key, group]) => `
+            <section class="probe-task-chart">
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          Array.from(byTask.entries()).forEach(([key, group]) => {
+            const recent = group.records.slice(0, 50).reverse();
+            const failHeightSec = 0.3;
+            charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
+              type: 'bar',
+              data: {
+                labels: recent.map(r => String(r.time || '').slice(11, 19)),
+                datasets: [{
+                  label: '端到端时延(s)',
+                  data: recent.map(r => r.ok ? (Number(r.latency_ms || 0) / 1000) : failHeightSec),
+                  backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.92)'),
+                  borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
+                  borderWidth: 1,
+                  borderRadius: 8,
+                }]
+              },
+              options: chartOptions({
+                plugins: {
+                  legend: { display: false },
+                  tooltip: {
+                    callbacks: {
+                      afterLabel: (ctx) => {
+                        const r = recent[ctx.dataIndex] || {};
+                        return [`结果: ${r.ok ? '成功' : '失败'}`, `消息: ${r.message || '-'}`];
+                      }
+                    }
+                  }
+                },
+                scales: {
+                  y: { beginAtZero: true, ticks: { callback: (v) => `${v}s` } }
+                }
+              })
+            });
+          });
+        }
       }
     }
 
