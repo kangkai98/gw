@@ -128,11 +128,11 @@
         <h2>在线监听</h2>
         <p class="subtle">持续监听网卡流量，按周期读入 pcap，对 FIN/RST、空闲超时或超过最长缓存时长的流回溯识别入库，并自动清理 pcap。</p>
         <form id="captureForm" class="inline-config-form panel-content-gap">
-          <input aria-label="监听网卡" name="interface" placeholder="网卡名，如 eth0 / en0 / any" required />
-          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="60" placeholder="周期秒数" required />
-          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="120" placeholder="idle timeout 秒" required />
-          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="300" placeholder="最长缓存秒，0不限" required />
-          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="0" placeholder="pcap保留秒，0删除" required />
+          <input aria-label="监听网卡" name="interface" value="eth0" placeholder="网卡名，如 eth0 / en0 / any" required />
+          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="周期秒数" required />
+          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="idle timeout 秒" required />
+          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required />
+          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required />
           <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" />
           <button aria-label="开始在线监听" type="submit">开始监听</button>
           <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
@@ -237,11 +237,11 @@
           </label>
           <label class="filter-item">
             <span>超时(秒)</span>
-            <input name="timeout_sec" type="number" min="2" max="90" step="1" value="20" />
+            <input name="timeout_sec" type="number" min="2" max="90" step="1" value="30" />
           </label>
           <label class="filter-item">
             <span>周期拨测(秒)</span>
-            <input name="schedule_interval_sec" type="number" min="5" max="86400" step="1" value="60" />
+            <input name="schedule_interval_sec" type="number" min="5" max="86400" step="1" value="30" />
           </label>
           <div class="actions probe-full">
             <button id="llmProbeSendBtn" type="submit">单次拨测</button>
@@ -274,6 +274,12 @@
         </div>
         <div class="table-scroll">
           <table id="probeRecordTable">
+            <thead><tr><th>时间</th><th>任务</th><th>触发</th><th>目标</th><th>模型</th><th>模式</th><th>结果</th><th>状态码</th><th>端到端(ms)</th><th>消息</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="table-scroll">
+          <table id="probeRecordTable">
             <thead><tr><th>时间</th><th>任务</th><th>触发</th><th>目标</th><th>模型</th><th>模式</th><th>结果</th><th>状态码</th><th>端到端(ms)</th><th>TTFB</th><th>TTFT</th><th>消息</th></tr></thead>
             <tbody></tbody>
           </table>
@@ -287,6 +293,11 @@
 
       <section class="glass panel chart-panel probe-chart-panel">
         <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">展示成功和失败拨测，柱高为端到端时延</span></div>
+        <canvas id="probeTrendChart"></canvas>
+      </section>
+
+      <section class="glass panel chart-panel probe-chart-panel">
+        <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
         <canvas id="probeTrendChart"></canvas>
       </section>
     </section>
@@ -419,57 +430,39 @@
           <tr>
             <td>${esc(r.time)}</td><td>${esc(r.task_name)}</td><td>${esc(r.trigger)}</td><td>${esc(r.target)}</td><td>${esc(r.model)}</td><td>${esc(r.mode)}</td>
             <td><span class="status-pill"><span class="light ${r.ok ? 'green' : 'red'}"></span>${r.ok ? '成功' : '失败'}</span></td>
-            <td>${esc(r.status_code)}</td><td>${num1(r.latency_ms)}</td><td>${num1(r.ttfb_ms)}</td><td>${num1(r.ttft_ms)}</td><td>${esc(r.message)}</td>
-          </tr>`).join('') || '<tr><td colspan="12" class="subtle">暂无拨测记录</td></tr>';
+            <td>${esc(r.status_code)}</td><td>${num1(r.latency_ms)}</td><td>${esc(r.message)}</td>
+          </tr>`).join('') || '<tr><td colspan="10" class="subtle">暂无拨测记录</td></tr>';
       }
-      if (has('probeTrendCharts')) {
-        Object.keys(charts).filter(k => k.startsWith('probeTrend:')).forEach((key) => { charts[key]?.destroy?.(); delete charts[key]; });
-        const container = $('probeTrendCharts');
-        const byTask = new Map();
-        records.forEach((record) => {
-          const taskKey = record.task_id === null || record.task_id === undefined ? 'single' : `task-${record.task_id}`;
-          if (!byTask.has(taskKey)) byTask.set(taskKey, { title: record.task_name || '单次', records: [] });
-          byTask.get(taskKey).records.push(record);
-        });
-        if (!byTask.size) {
-          container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
-        } else {
-          container.innerHTML = Array.from(byTask.entries()).map(([key, group]) => `
-            <section class="probe-task-chart">
-              <h3>${esc(group.title)}</h3>
-              <canvas id="probeTrendChart-${esc(key)}"></canvas>
-            </section>`).join('');
-          Array.from(byTask.entries()).forEach(([key, group]) => {
-            const recent = group.records.slice(0, 50).reverse();
-            charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
-              type: 'bar',
-              data: {
-                labels: recent.map(r => String(r.time || '').slice(11, 19)),
-                datasets: [{
-                  label: '端到端时延(ms)',
-                  data: recent.map(r => Number(r.latency_ms || 0)),
-                  backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
-                  borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
-                  borderWidth: 1,
-                  borderRadius: 8,
-                }]
-              },
-              options: chartOptions({
-                plugins: {
-                  legend: { display: false },
-                  tooltip: {
-                    callbacks: {
-                      afterLabel: (ctx) => {
-                        const r = recent[ctx.dataIndex] || {};
-                        return [`结果: ${r.ok ? '成功' : '失败'}`, `任务: ${r.task_name || '-'}`, `消息: ${r.message || '-'}`];
-                      }
-                    }
+      if (has('probeTrendChart')) {
+        charts.probeTrend?.destroy?.();
+        const recent = records.slice(0, 50).reverse();
+        charts.probeTrend = new Chart($('probeTrendChart'), {
+          type: 'bar',
+          data: {
+            labels: recent.map(r => `${String(r.task_name || '-')} ${String(r.time || '').slice(11, 19)}`),
+            datasets: [{
+              label: '端到端时延(ms)',
+              data: recent.map(r => Number(r.latency_ms || 0)),
+              backgroundColor: recent.map(r => r.ok ? 'rgba(77,187,122,.72)' : 'rgba(228,93,110,.72)'),
+              borderColor: recent.map(r => r.ok ? '#4dbb7a' : '#e45d6e'),
+              borderWidth: 1,
+              borderRadius: 8,
+            }]
+          },
+          options: chartOptions({
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  afterLabel: (ctx) => {
+                    const r = recent[ctx.dataIndex] || {};
+                    return [`结果: ${r.ok ? '成功' : '失败'}`, `任务: ${r.task_name || '-'}`, `消息: ${r.message || '-'}`];
                   }
                 }
-              })
-            });
-          });
-        }
+              }
+            }
+          })
+        });
       }
     }
 
@@ -957,7 +950,6 @@
 
     if (has('llmProbeForm')) {
       fetchProbeState();
-      window.setInterval(fetchProbeState, 3000);
       $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
       if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
         const fd = new FormData($('llmProbeForm'));
