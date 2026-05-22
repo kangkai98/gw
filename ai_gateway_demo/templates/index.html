@@ -996,25 +996,17 @@
     }
 
     if (has('llmProbeForm')) {
-      fetchProbeState();
-      ['target', 'model', 'api_key', 'question', 'mode'].forEach((name) => {
-        const el = document.querySelector(`#llmProbeForm [name="${name}"]`);
-        if (el) el.addEventListener('input', updateProbeCurlPreview);
-        if (el) el.addEventListener('change', updateProbeCurlPreview);
-      });
-      if (has('llmRawCurl')) $('llmRawCurl').addEventListener('input', updateProbeCurlPreview);
-      if (has('llmPassthrough')) $('llmPassthrough').addEventListener('change', updateProbeCurlPreview);
-      updateProbeCurlPreview();
-      $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); await fetchProbeState(); };
-      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
+      $('llmProbeForm').addEventListener('submit', async (e) => { e.preventDefault(); await runLlmProbe('单次'); return false; });
+      fetchProbeState().catch((err) => { console.error(err); $('status').textContent = `加载拨测任务失败：${err.message || err}`; });
+      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
         const fd = new FormData($('llmProbeForm'));
         const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
         fd.set('schedule_interval_sec', String(sec));
         const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
         const data = await resp.json();
         $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
-        await fetchProbeState();
-      };
+      });
       if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
         await Promise.all(llmProbeTasks.map(task => fetch(`/api/probe/tasks/${task.id}/stop`, { method: 'POST' })));
         await fetchProbeState();
@@ -1030,7 +1022,8 @@
         await fetchProbeState();
         $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
-      if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').onclick = async () => {
+      if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
         const fd = new FormData($('llmProbeForm'));
         fd.set('category_minor', String(fd.get('follow_minor') || '').trim());
         if (!String(fd.get('category_minor') || '').trim()) {
@@ -1041,7 +1034,7 @@
         const data = await resp.json();
         $('status').textContent = data.ok ? '已添加随流任务。' : `添加随流任务失败：${data.message || '未知错误'}`;
         await fetchProbeState();
-      };
+      });
       if (has('clearFollowProbeTasks')) $('clearFollowProbeTasks').onclick = async () => {
         await fetch('/api/probe/follow-tasks/clear', { method: 'POST' });
         await fetchProbeState();
