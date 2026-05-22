@@ -553,6 +553,43 @@ def _run_llm_probe(
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}"}
 
 
+def _build_llm_probe_curl(chat_url: str, api_key: str, payload: dict[str, Any]) -> str:
+    headers = ["-H 'Content-Type: application/json'"]
+    if api_key.strip():
+        headers.append(f"-H 'Authorization: Bearer {api_key.strip()}'")
+    payload_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return " ".join(["curl -X POST", shlex.quote(chat_url), *headers, "--data", shlex.quote(payload_text)])
+
+
+def _parse_curl_command(raw_curl: str) -> tuple[str, dict[str, str], str]:
+    parts = shlex.split(raw_curl or "")
+    if not parts or parts[0] != "curl":
+        raise ValueError("请输入以 curl 开头的命令")
+    headers: dict[str, str] = {}
+    body = ""
+    url = ""
+    i = 1
+    while i < len(parts):
+        item = parts[i]
+        if item in ("-H", "--header") and i + 1 < len(parts):
+            hv = parts[i + 1]
+            if ":" in hv:
+                k, v = hv.split(":", 1)
+                headers[k.strip()] = v.strip()
+            i += 2
+            continue
+        if item in ("-d", "--data", "--data-raw", "--data-binary") and i + 1 < len(parts):
+            body = parts[i + 1]
+            i += 2
+            continue
+        if item.startswith("http://") or item.startswith("https://"):
+            url = item
+        i += 1
+    if not url:
+        raise ValueError("curl 命令中缺少 URL")
+    return url, headers, body
+
+
 @app.post("/api/probe/llm")
 def api_probe_llm(
     target: str = Form(...),
@@ -562,8 +599,38 @@ def api_probe_llm(
     mode: str = Form(default="standard"),
     timeout_sec: float = Form(default=20.0),
     trigger: str = Form(default=""),
+    raw_curl: str = Form(default=""),
+    passthrough: str = Form(default=""),
 ):
-    result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
+    if str(passthrough).strip().lower() in {"1", "true", "yes", "on"} and raw_curl.strip():
+        try:
+            parsed_url, parsed_headers, parsed_body = _parse_curl_command(raw_curl)
+            timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+            t0 = time.perf_counter()
+            status_code, raw, latency_ms = _http_post_json(
+                parsed_url,
+                json.loads(parsed_body or "{}"),
+                parsed_headers or {"Content-Type": "application/json"},
+                timeout_value,
+            )
+            result = {
+                "ok": status_code < 400,
+                "kind": "llm_passthrough",
+                "availability": "可用" if status_code < 400 else "不可用",
+                "status_code": status_code,
+                "latency_ms": round(latency_ms, 1),
+                "response_text": raw.decode("utf-8", errors="ignore")[:2000],
+                "chat_url": parsed_url,
+                "message": "透传拨测完成" if status_code < 400 else "透传拨测失败",
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "final_curl": raw_curl.strip(),
+            }
+        except Exception as exc:
+            result = {"ok": False, "kind": "llm_passthrough", "availability": "不可用", "message": f"透传失败: {exc}", "final_curl": raw_curl.strip()}
+    else:
+        result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
+        payload = {"model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini", "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}], "stream": mode == "stream"}
+        result["final_curl"] = _build_llm_probe_curl(result.get("chat_url") or _to_chat_completions_url(target), api_key, payload)
     if trigger:
         _add_probe_record(
             {
