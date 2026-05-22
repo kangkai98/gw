@@ -1042,8 +1042,9 @@
       if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').addEventListener('click', async (e) => {
         e.preventDefault();
         const fd = collectProbeBaseFormData();
-        const raw = new FormData($('llmProbeForm'));
-        fd.set('category_minor', String(raw.get('follow_minor') || '').trim());
+        const categoryMinor = window.prompt('请输入随流小类名称（例如：知识助手）', '');
+        if (categoryMinor === null) return;
+        fd.set('category_minor', String(categoryMinor || '').trim());
         if (!String(fd.get('category_minor') || '').trim()) {
           $('status').textContent = '请先填写随流小类名称。';
           return;
