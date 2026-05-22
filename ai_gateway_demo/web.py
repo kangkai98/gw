@@ -4,7 +4,6 @@ import os
 import socket
 import subprocess
 import json
-import shlex
 import ssl
 import time
 import http.client
@@ -58,10 +57,21 @@ class ProbeTask:
     stop_event: threading.Event = field(default_factory=threading.Event)
 
 
+@dataclass
+class FollowProbeTask:
+    id: int
+    category_minor: str
+    params: dict[str, Any]
+    last_triggered_entry_id: int = 0
+    last_message: str = "-"
+
+
 _probe_lock = threading.Lock()
 _probe_tasks: dict[int, ProbeTask] = {}
 _probe_records: list[dict[str, Any]] = []
 _next_probe_task_id = 1
+_follow_probe_tasks: dict[int, FollowProbeTask] = {}
+_next_follow_probe_task_id = 1
 
 
 def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
@@ -650,6 +660,56 @@ def api_probe_llm(
             }
         )
     return result
+
+
+@app.get("/api/probe/follow-tasks")
+def api_probe_follow_tasks():
+    with _probe_lock:
+        items = [dict(id=t.id, category_minor=t.category_minor, **t.params, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
+    return {"items": items}
+
+
+@app.post("/api/probe/follow-tasks")
+def api_probe_follow_task_add(
+    category_minor: str = Form(...),
+    target: str = Form(...),
+    api_key: str = Form(default=""),
+    model: str = Form(default="gpt-4o-mini"),
+    question: str = Form(default="你好"),
+    mode: str = Form(default="standard"),
+    timeout_sec: float = Form(default=20.0),
+):
+    global _next_follow_probe_task_id
+    with _probe_lock:
+        task = FollowProbeTask(
+            id=_next_follow_probe_task_id,
+            category_minor=(category_minor or "").strip(),
+            params={"target": target.strip(), "api_key": api_key.strip(), "model": model.strip() or "gpt-4o-mini", "question": question.strip() or "你好", "mode": mode.strip() or "standard", "timeout_sec": str(max(2.0, min(float(timeout_sec), 90.0)))},
+        )
+        _next_follow_probe_task_id += 1
+        _follow_probe_tasks[task.id] = task
+    return {"ok": True, "task_id": task.id}
+
+
+@app.post("/api/probe/follow-tasks/clear")
+def api_probe_follow_tasks_clear():
+    global _next_follow_probe_task_id
+    with _probe_lock:
+        _follow_probe_tasks.clear()
+        _next_follow_probe_task_id = 1
+    return {"ok": True}
+
+
+@app.post("/api/probe/follow-tasks/{task_id}/triggered")
+def api_probe_follow_task_triggered(task_id: int, entry_id: int = Form(...), message: str = Form(default="")):
+    with _probe_lock:
+        task = _follow_probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        task.last_triggered_entry_id = max(task.last_triggered_entry_id, int(entry_id or 0))
+        if message:
+            task.last_message = message
+    return {"ok": True}
 
 
 
