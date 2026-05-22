@@ -195,3 +195,11 @@ tr:hover td { background: rgba(255,255,255,.55); }
 }
 #captureStatus { white-space: pre-line; margin-top: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); }
 #captureForm { grid-template-columns: minmax(150px, .8fr) minmax(100px, .45fr) minmax(180px, 1fr) auto auto; }
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 1200px) {
+  .grid-two { grid-template-columns: 1fr; }
+}

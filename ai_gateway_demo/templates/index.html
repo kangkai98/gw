@@ -243,6 +243,10 @@
             <span>周期拨测(秒)</span>
             <input name="schedule_interval_sec" type="number" min="5" max="86400" step="1" value="30" />
           </label>
+          <label class="filter-item">
+            <span>随流小类名称</span>
+            <input name="follow_minor" id="llmFollowMinor" placeholder="例如：知识助手" />
+          </label>
           <div class="actions probe-full">
             <button id="llmProbeSendBtn" type="submit">单次拨测</button>
             <button id="llmProbeStartBtn" type="button">添加周期任务</button>
@@ -263,6 +267,7 @@
         </div>
       </section>
 
+      <div class="grid-two">
       <section class="glass panel probe-task-panel">
         <div class="panel-head">
           <h2>周期拨测任务列表</h2>
@@ -287,6 +292,7 @@
           </table>
         </div>
       </section>
+      </div>
 
       <section class="glass panel probe-record-panel">
         <div class="panel-head">
@@ -429,6 +435,10 @@
       renderProbeTasks();
       renderFollowProbeTasks();
       renderProbeRecords();
+    }
+    async function parseJsonSafe(resp) {
+      const text = await resp.text();
+      try { return JSON.parse(text); } catch { return { ok: false, message: text || `HTTP ${resp.status}` }; }
     }
     function renderProbeRecords() {
       const records = llmProbeRecords || [];
@@ -968,7 +978,7 @@
       if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
       try {
         const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
-        const data = await resp.json();
+        const data = await parseJsonSafe(resp);
         const mode = String(fd.get('mode') || 'standard');
         const lines = [
           `触发方式: ${trigger}`,
@@ -1031,7 +1041,7 @@
           return;
         }
         const resp = await fetch('/api/probe/follow-tasks', { method: 'POST', body: fd });
-        const data = await resp.json();
+        const data = await parseJsonSafe(resp);
         $('status').textContent = data.ok ? '已添加随流任务。' : `添加随流任务失败：${data.message || '未知错误'}`;
         await fetchProbeState();
       });
@@ -1054,6 +1064,37 @@
           console.error(err);
         }
       }, 5000);
+      window.setInterval(async () => {
+        try {
+          const entriesResp = await fetch('/api/entries');
+          const entriesData = await parseJsonSafe(entriesResp);
+          const entries = entriesData.items || [];
+          for (const row of entries) {
+            if (classifyStatus(row).cls !== 'red') continue;
+            for (const task of llmFollowProbeTasks) {
+              if ((row.category_minor || '') !== (task.category_minor || '')) continue;
+              if (Number(row.id || 0) <= Number(task.last_triggered_entry_id || 0)) continue;
+              const fd = new FormData();
+              fd.append('target', task.target || '');
+              fd.append('api_key', task.api_key || '');
+              fd.append('model', task.model || 'gpt-4o-mini');
+              fd.append('question', task.question || '你好');
+              fd.append('mode', task.mode || 'standard');
+              fd.append('timeout_sec', String(task.timeout_sec || '20'));
+              fd.append('trigger', `随流(${task.category_minor})#${row.id}`);
+              const r = await fetch('/api/probe/llm', { method: 'POST', body: fd });
+              const j = await parseJsonSafe(r);
+              const markFd = new FormData();
+              markFd.append('entry_id', String(row.id || 0));
+              markFd.append('message', j.message || '');
+              await fetch(`/api/probe/follow-tasks/${task.id}/triggered`, { method: 'POST', body: markFd });
+            }
+          }
+          await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 8000);
     }
 
     if (has('detailQueryForm')) {
