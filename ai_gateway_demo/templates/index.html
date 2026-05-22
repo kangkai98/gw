@@ -1042,9 +1042,8 @@
       if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').addEventListener('click', async (e) => {
         e.preventDefault();
         const fd = collectProbeBaseFormData();
-        const categoryMinor = window.prompt('请输入随流小类名称（例如：知识助手）', '');
-        if (categoryMinor === null) return;
-        fd.set('category_minor', String(categoryMinor || '').trim());
+        const raw = new FormData($('llmProbeForm'));
+        fd.set('category_minor', String(raw.get('follow_minor') || '').trim());
         if (!String(fd.get('category_minor') || '').trim()) {
           $('status').textContent = '请先填写随流小类名称。';
           return;
@@ -1073,37 +1072,7 @@
           console.error(err);
         }
       }, 5000);
-      window.setInterval(async () => {
-        try {
-          const entriesResp = await fetch('/api/entries');
-          const entriesData = await parseJsonSafe(entriesResp);
-          const entries = entriesData.items || [];
-          for (const row of entries) {
-            if (classifyStatus(row).cls !== 'red') continue;
-            for (const task of llmFollowProbeTasks) {
-              if ((row.category_minor || '') !== (task.category_minor || '')) continue;
-              if (Number(row.id || 0) <= Number(task.last_triggered_entry_id || 0)) continue;
-              const fd = new FormData();
-              fd.append('target', task.target || '');
-              fd.append('api_key', task.api_key || '');
-              fd.append('model', task.model || 'gpt-4o-mini');
-              fd.append('question', task.question || '你好');
-              fd.append('mode', task.mode || 'standard');
-              fd.append('timeout_sec', String(task.timeout_sec || '20'));
-              fd.append('trigger', `随流(${task.category_minor})#${row.id}`);
-              const r = await fetch('/api/probe/llm', { method: 'POST', body: fd });
-              const j = await parseJsonSafe(r);
-              const markFd = new FormData();
-              markFd.append('entry_id', String(row.id || 0));
-              markFd.append('message', j.message || '');
-              await fetch(`/api/probe/follow-tasks/${task.id}/triggered`, { method: 'POST', body: markFd });
-            }
-          }
-          await fetchProbeState();
-        } catch (err) {
-          console.error(err);
-        }
-      }, 8000);
+
     }
 
     if (has('detailQueryForm')) {
