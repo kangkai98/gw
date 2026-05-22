@@ -257,6 +257,10 @@
           <div class="probe-response-head">LLM拨测结果</div>
           <pre id="llmProbeResultText">暂未发送请求。</pre>
         </div>
+        <div id="llmFinalCurlBox" class="probe-response">
+          <div class="probe-response-head">最终发送curl命令</div>
+          <pre id="llmFinalCurlText">等待生成...</pre>
+        </div>
       </section>
 
       <section class="glass panel probe-task-panel">
@@ -531,6 +535,13 @@
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
       const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
       return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
+    }
+    function updateProbeCurlPreview() {
+      if (!has('llmProbeForm') || !has('llmFinalCurlText')) return;
+      const form = $('llmProbeForm');
+      const passthrough = has('llmPassthrough') ? String($('llmPassthrough').value || 'false') : 'false';
+      const raw = has('llmRawCurl') ? String($('llmRawCurl').value || '').trim() : '';
+      $('llmFinalCurlText').textContent = (passthrough === 'true' && raw) ? raw : buildCurlTemplateFromFields(form);
     }
 
     function queryString() {
@@ -948,6 +959,7 @@
         }
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
+        if (data.final_curl && has('llmFinalCurlText')) $('llmFinalCurlText').textContent = data.final_curl;
         if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
         $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
         await fetchProbeState();
@@ -962,6 +974,14 @@
 
     if (has('llmProbeForm')) {
       fetchProbeState();
+      ['target', 'model', 'api_key', 'question', 'mode'].forEach((name) => {
+        const el = document.querySelector(`#llmProbeForm [name="${name}"]`);
+        if (el) el.addEventListener('input', updateProbeCurlPreview);
+        if (el) el.addEventListener('change', updateProbeCurlPreview);
+      });
+      if (has('llmRawCurl')) $('llmRawCurl').addEventListener('input', updateProbeCurlPreview);
+      if (has('llmPassthrough')) $('llmPassthrough').addEventListener('change', updateProbeCurlPreview);
+      updateProbeCurlPreview();
       $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
       if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
         const fd = new FormData($('llmProbeForm'));
