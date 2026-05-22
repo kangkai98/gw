@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
-import json
 import shlex
+import json
 import ssl
 import time
 import http.client
@@ -58,10 +58,22 @@ class ProbeTask:
     stop_event: threading.Event = field(default_factory=threading.Event)
 
 
+@dataclass
+class FollowProbeTask:
+    id: int
+    category_minor: str
+    params: dict[str, Any]
+    last_triggered_entry_id: int = 0
+    last_message: str = "-"
+
+
 _probe_lock = threading.Lock()
 _probe_tasks: dict[int, ProbeTask] = {}
 _probe_records: list[dict[str, Any]] = []
 _next_probe_task_id = 1
+_follow_probe_tasks: dict[int, FollowProbeTask] = {}
+_next_follow_probe_task_id = 1
+DEFAULT_HEALTH_CFG = {"ttft_alert": 3500.0, "tpot_alert": 180.0}
 
 
 def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
@@ -88,6 +100,53 @@ def _add_probe_record(record: dict[str, Any]) -> None:
 
 def _probe_now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
+
+def _is_red_entry(entry: dict[str, Any]) -> bool:
+    return float(entry.get("ttft_ms") or 0.0) >= DEFAULT_HEALTH_CFG["ttft_alert"] or float(entry.get("tpot_ms_per_token") or 0.0) >= DEFAULT_HEALTH_CFG["tpot_alert"]
+
+
+def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
+    if not _is_red_entry(entry):
+        return
+    entry_id = int(entry.get("id") or 0)
+    minor = str(entry.get("category_minor") or "").strip()
+    if entry_id <= 0 or not minor:
+        return
+    with _probe_lock:
+        tasks = [t for t in _follow_probe_tasks.values() if t.category_minor == minor and entry_id > t.last_triggered_entry_id]
+    for task in tasks:
+        params = dict(task.params)
+        result = _run_llm_probe(
+            params.get("target", ""),
+            params.get("api_key", ""),
+            params.get("model", "gpt-4o-mini"),
+            params.get("question", "你好"),
+            params.get("mode", "standard"),
+            float(params.get("timeout_sec") or 20.0),
+        )
+        _add_probe_record(
+            {
+                "time": _probe_now_text(),
+                "task_id": task.id,
+                "task_name": f"随流任务{task.id}",
+                "trigger": f"随流({minor})#{entry_id}",
+                "target": params.get("target", ""),
+                "model": params.get("model", ""),
+                "mode": params.get("mode", "standard"),
+                "ok": bool(result.get("ok")),
+                "status_code": result.get("status_code"),
+                "latency_ms": result.get("latency_ms"),
+                "ttfb_ms": result.get("ttfb_ms"),
+                "ttft_ms": result.get("ttft_ms"),
+                "message": result.get("message") or "",
+            }
+        )
+        with _probe_lock:
+            live = _follow_probe_tasks.get(task.id)
+            if live:
+                live.last_triggered_entry_id = max(live.last_triggered_entry_id, entry_id)
+                live.last_message = str(result.get("message") or "-")
 
 
 @app.on_event("startup")
@@ -163,7 +222,13 @@ async def api_upload(file: UploadFile = File(...)):
 
     configs = list_self_hosted()
     entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
-    inserted = sum(1 for e in entries if insert_entry(e))
+    inserted = 0
+    for e in entries:
+        if insert_entry(e):
+            inserted += 1
+            latest = list_entries(start_real=e.get("start_time_real"), end_real=e.get("start_time_real"))
+            if latest:
+                _maybe_trigger_follow_for_entry(latest[0])
 
     return {"inserted": inserted, "detected": len(entries)}
 
@@ -585,6 +650,56 @@ def api_probe_llm(
     return result
 
 
+@app.get("/api/probe/follow-tasks")
+def api_probe_follow_tasks():
+    with _probe_lock:
+        items = [dict(id=t.id, category_minor=t.category_minor, **t.params, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
+    return {"items": items}
+
+
+@app.post("/api/probe/follow-tasks")
+def api_probe_follow_task_add(
+    category_minor: str = Form(...),
+    target: str = Form(...),
+    api_key: str = Form(default=""),
+    model: str = Form(default="gpt-4o-mini"),
+    question: str = Form(default="你好"),
+    mode: str = Form(default="standard"),
+    timeout_sec: float = Form(default=20.0),
+):
+    global _next_follow_probe_task_id
+    with _probe_lock:
+        task = FollowProbeTask(
+            id=_next_follow_probe_task_id,
+            category_minor=(category_minor or "").strip(),
+            params={"target": target.strip(), "api_key": api_key.strip(), "model": model.strip() or "gpt-4o-mini", "question": question.strip() or "你好", "mode": mode.strip() or "standard", "timeout_sec": str(max(2.0, min(float(timeout_sec), 90.0)))},
+        )
+        _next_follow_probe_task_id += 1
+        _follow_probe_tasks[task.id] = task
+    return {"ok": True, "task_id": task.id}
+
+
+@app.post("/api/probe/follow-tasks/clear")
+def api_probe_follow_tasks_clear():
+    global _next_follow_probe_task_id
+    with _probe_lock:
+        _follow_probe_tasks.clear()
+        _next_follow_probe_task_id = 1
+    return {"ok": True}
+
+
+@app.post("/api/probe/follow-tasks/{task_id}/triggered")
+def api_probe_follow_task_triggered(task_id: int, entry_id: int = Form(...), message: str = Form(default="")):
+    with _probe_lock:
+        task = _follow_probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        task.last_triggered_entry_id = max(task.last_triggered_entry_id, int(entry_id or 0))
+        if message:
+            task.last_message = message
+    return {"ok": True}
+
+
 
 
 def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) -> dict[str, Any]:
@@ -614,9 +729,12 @@ def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) ->
         }
     return result_holder.get("result") or {"ok": False, "availability": "不可用", "message": "拨测失败"}
 def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
+    started_at = _probe_now_text()
     with _probe_lock:
         task = _probe_tasks.get(task_id)
         if not task:
+            return
+        if task.running:
             return
         params = dict(task.params)
         task.running = True
@@ -625,7 +743,7 @@ def _run_probe_task_once(task_id: int, trigger: str = "周期") -> None:
     timeout_value = max(2.0, min(float(params.get("timeout_sec") or 20.0), 90.0))
     result = _run_llm_probe_with_deadline(params, timeout_value)
     record = {
-        "time": _probe_now_text(),
+        "time": started_at,
         "task_id": task_id,
         "task_name": f"任务{task_id}",
         "trigger": trigger,
@@ -693,8 +811,9 @@ def _stop_probe_task(task: ProbeTask) -> None:
 def api_probe_tasks():
     with _probe_lock:
         tasks = [_probe_task_view(task) for task in sorted(_probe_tasks.values(), key=lambda item: item.id)]
+        follow_tasks = [dict(id=t.id, category_minor=t.category_minor, **t.params, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
         records = list(_probe_records)
-    return {"items": tasks, "records": records}
+    return {"items": tasks, "follow_items": follow_tasks, "records": records}
 
 
 @app.post("/api/probe/tasks")
