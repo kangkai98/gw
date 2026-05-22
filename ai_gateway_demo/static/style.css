@@ -98,6 +98,7 @@ textarea {
 }
 input, select { width: 100%; padding: 12px; font-weight: 440; color: #253550; background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(247,250,255,.84)); }
 button { padding: 11px 15px; font-weight: 560; letter-spacing: .01em; background: linear-gradient(180deg, #ffffff 0%, #f3f7ff 100%); color: #20304c; cursor: pointer; transition: .2s ease; }
+button { white-space: nowrap; min-width: 130px; }
 button:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(54, 93, 160, .16); }
 .actions { display: flex; gap: 8px; margin-top: 10px; margin-bottom: 10px; }
 button.danger { color: #fff; background: linear-gradient(180deg, #eb7388, #df4d67); border-color: transparent; }
@@ -195,3 +196,16 @@ tr:hover td { background: rgba(255,255,255,.55); }
 }
 #captureStatus { white-space: pre-line; margin-top: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); }
 #captureForm { grid-template-columns: minmax(150px, .8fr) minmax(100px, .45fr) minmax(180px, 1fr) auto auto; }
+.grid-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.probe-curl-editor {
+  width: 100%;
+  min-height: 150px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (max-width: 1200px) {
+  .grid-two { grid-template-columns: 1fr; }
+}
