@@ -982,6 +982,7 @@
         }
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
+        if (data.final_curl && has('llmFinalCurlText')) $('llmFinalCurlText').textContent = data.final_curl;
         if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
         $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
         await fetchProbeState();
@@ -1004,7 +1005,6 @@
         fd.set('schedule_interval_sec', String(sec));
         const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
         const data = await resp.json();
-        await fetchProbeState();
         $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
       });
       if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
