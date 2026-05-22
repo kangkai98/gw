@@ -246,7 +246,12 @@
           <div class="actions probe-full">
             <button id="llmProbeSendBtn" type="submit">单次拨测</button>
             <button id="llmProbeStartBtn" type="button">添加周期任务</button>
+            <button id="llmProbeFollowBtn" type="button">添加随流任务</button>
           </div>
+          <label class="filter-item">
+            <span>随流小类名称</span>
+            <input name="follow_minor" id="llmFollowMinor" placeholder="例如：知识助手" />
+          </label>
         </form>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
@@ -430,13 +435,12 @@
           container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
         } else {
           const groups = Array.from(byTask.entries());
-          const first = groups[0];
-          container.innerHTML = `
+          container.innerHTML = groups.map(([key, group]) => `
             <section class="probe-task-chart">
-              <h3>${esc(first[1].title)}</h3>
-              <canvas id="probeTrendChart-${esc(first[0])}"></canvas>
-            </section>`;
-          [first].forEach(([key, group]) => {
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          groups.forEach(([key, group]) => {
             const recent = group.records.slice(0, 50).reverse();
             const failHeightSec = 0.3;
             charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
@@ -983,6 +987,55 @@
         await fetchProbeState();
         $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
+      if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').onclick = async () => {
+        const fd = new FormData($('llmProbeForm'));
+        fd.set('category_minor', String(fd.get('follow_minor') || '').trim());
+        if (!String(fd.get('category_minor') || '').trim()) {
+          $('status').textContent = '请先填写随流小类名称。';
+          return;
+        }
+        const resp = await fetch('/api/probe/follow-tasks', { method: 'POST', body: fd });
+        const data = await resp.json();
+        $('status').textContent = data.ok ? '已添加随流任务。' : `添加随流任务失败：${data.message || '未知错误'}`;
+      };
+      window.setInterval(async () => {
+        try {
+          await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 5000);
+      window.setInterval(async () => {
+        try {
+          const [entriesResp, followResp] = await Promise.all([fetch('/api/entries'), fetch('/api/probe/follow-tasks')]);
+          const entries = (await entriesResp.json()).items || [];
+          const followTasks = (await followResp.json()).items || [];
+          const redRows = entries.filter((e) => classifyStatus(e).cls === 'red');
+          for (const row of redRows) {
+            for (const task of followTasks) {
+              if ((row.category_minor || '') !== (task.category_minor || '')) continue;
+              if (Number(row.id || 0) <= Number(task.last_triggered_entry_id || 0)) continue;
+              const fd = new FormData();
+              fd.append('target', task.target || '');
+              fd.append('api_key', task.api_key || '');
+              fd.append('model', task.model || 'gpt-4o-mini');
+              fd.append('question', task.question || '你好');
+              fd.append('mode', task.mode || 'standard');
+              fd.append('timeout_sec', String(task.timeout_sec || '20'));
+              fd.append('trigger', `随流(${task.category_minor})#${row.id}`);
+              const triggerResp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
+              const triggerData = await triggerResp.json();
+              const markFd = new FormData();
+              markFd.append('entry_id', String(row.id || 0));
+              markFd.append('message', triggerData.message || '');
+              await fetch(`/api/probe/follow-tasks/${task.id}/triggered`, { method: 'POST', body: markFd });
+            }
+          }
+          if (redRows.length) await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 8000);
     }
 
     if (has('detailQueryForm')) {
