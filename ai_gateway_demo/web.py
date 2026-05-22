@@ -124,6 +124,9 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
             params.get("question", "你好"),
             params.get("mode", "standard"),
             float(params.get("timeout_sec") or 20.0),
+            params.get("system_prompt", ""),
+            params.get("reasoning_effort", ""),
+            params.get("thinking_type", ""),
         )
         _add_probe_record(
             {
@@ -458,6 +461,69 @@ def _to_chat_completions_url(base_url: str) -> str:
     return f"{raw_target}/v1/chat/completions"
 
 
+
+
+def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    headers = ["-H", "Content-Type: application/json"]
+    if api_key.strip():
+        headers += ["-H", f"Authorization: Bearer {api_key.strip()}"]
+    body = json.dumps(payload, ensure_ascii=False)
+    cmd = [
+        "curl", "-sS", "-X", "POST",
+        "--max-time", str(max(2.0, min(float(timeout_sec), 90.0))),
+        chat_url,
+        *headers,
+        "--data", body,
+    ]
+    if stream_mode:
+        cmd.insert(1, "-N")
+    t0 = time.perf_counter()
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    latency_ms = (time.perf_counter() - t0) * 1000
+    if proc.returncode != 0:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}"}
+
+    out = proc.stdout or ""
+    if stream_mode:
+        collected: list[str] = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            payload_text = line[5:].strip()
+            if not payload_text or payload_text == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload_text)
+            except Exception:
+                continue
+            choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+            delta = choice.get("delta") if isinstance(choice, dict) else {}
+            if isinstance(delta, dict) and delta.get("content"):
+                collected.append(str(delta.get("content")))
+        return {
+            "ok": True,
+            "kind": "llm_stream",
+            "availability": "可用",
+            "status_code": 200,
+            "latency_ms": round(latency_ms, 1),
+            "ttfb_ms": None,
+            "ttft_ms": None,
+            "response_text": "".join(collected)[:2000],
+            "chat_url": chat_url,
+            "message": "流式拨测完成",
+        }
+
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "chat_url": chat_url, "message": "标准拨测失败"}
+    choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}"}
+    return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成"}
 def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
     parsed = urlparse(url)
     scheme = parsed.scheme or "http"
@@ -565,57 +631,13 @@ def _run_llm_probe(
 ) -> dict[str, Any]:
     chat_url = _to_chat_completions_url(target)
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
-    headers = {
-        "Content-Type": "application/json",
-    }
-    if api_key.strip():
-        headers["Authorization"] = f"Bearer {api_key.strip()}"
-
     stream_mode = mode == "stream"
-    payload = {
+    payload: dict[str, Any] = {
         "model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini",
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": stream_mode,
     }
-    try:
-        if stream_mode:
-            stream_result = _http_post_stream_probe(chat_url, payload, headers, timeout_value)
-            ok = int(stream_result["status_code"]) < 400
-            return {
-                "ok": ok,
-                "kind": "llm_stream",
-                "availability": "可用" if ok else "不可用",
-                "status_code": stream_result["status_code"],
-                "latency_ms": round(float(stream_result["latency_ms"]), 1),
-                "ttfb_ms": None if stream_result["ttfb_ms"] is None else round(float(stream_result["ttfb_ms"]), 1),
-                "ttft_ms": None if stream_result["ttft_ms"] is None else round(float(stream_result["ttft_ms"]), 1),
-                "response_text": stream_result["response_text"],
-                "chat_url": chat_url,
-                "message": "流式拨测完成" if ok else "流式拨测失败",
-            }
-        status_code, raw, latency_ms = _http_post_json(chat_url, payload, headers, timeout_value)
-        ok = status_code < 400
-        resp_text = raw.decode("utf-8", errors="ignore")
-        short_text = ""
-        try:
-            parsed = json.loads(resp_text)
-            choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
-            message = choice.get("message") if isinstance(choice, dict) else {}
-            short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
-        except Exception:
-            short_text = resp_text[:2000]
-        return {
-            "ok": ok,
-            "kind": "llm_standard",
-            "availability": "可用" if ok else "不可用",
-            "status_code": status_code,
-            "latency_ms": round(latency_ms, 1),
-            "response_text": short_text,
-            "chat_url": chat_url,
-            "message": "标准拨测完成" if ok else "标准拨测失败",
-        }
-    except Exception as exc:  # pragma: no cover - network dependent
-        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}"}
+    return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
 
 
 def _build_llm_probe_curl(chat_url: str, api_key: str, payload: dict[str, Any]) -> str:
@@ -780,6 +802,9 @@ def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) ->
             params.get("question", "你好"),
             params.get("mode", "standard"),
             float(params.get("timeout_sec") or deadline_sec),
+            params.get("system_prompt", ""),
+            params.get("reasoning_effort", ""),
+            params.get("thinking_type", ""),
         )
 
     t0 = time.perf_counter()

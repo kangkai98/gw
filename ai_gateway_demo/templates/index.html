@@ -569,8 +569,22 @@
       const question = String(fd.get('question') || '').trim() || '你好';
       const stream = String(fd.get('mode') || 'standard') === 'stream';
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
-      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: question }], stream }, null, 2);
-      return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
+      const payloadObj = { model, messages: [{ role: 'user', content: question }], stream };
+      const payload = JSON.stringify(payloadObj, null, 2);
+      return `curl -X POST '${chatUrl}' \
+  -H 'Authorization: Bearer ${apiKey}' \
+  -H 'Content-Type: application/json' \
+  -d '${payload}'`;
+    }
+    function updateFinalCurl() {
+      if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
+      $('llmFinalCurlText').value = buildCurlTemplateFromFields($('llmProbeForm'));
+    }
+    function collectProbeBaseFormData() {
+      const src = new FormData($('llmProbeForm'));
+      const fd = new FormData();
+      ['target', 'api_key', 'model', 'question', 'mode', 'timeout_sec'].forEach((k) => fd.append(k, String(src.get(k) || '')));
+      return fd;
     }
     function updateFinalCurl() {
       if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
