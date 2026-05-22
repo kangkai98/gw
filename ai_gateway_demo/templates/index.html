@@ -253,6 +253,10 @@
             <input name="follow_minor" id="llmFollowMinor" placeholder="例如：知识助手" />
           </label>
         </form>
+        <div id="llmFinalCurlBox" class="probe-response">
+          <div class="probe-response-head">最终发送curl命令</div>
+          <pre id="llmFinalCurlText">等待生成...</pre>
+        </div>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
           <pre id="llmProbeResultText">暂未发送请求。</pre>
@@ -271,6 +275,18 @@
         <div class="table-scroll probe-task-scroll">
           <table id="probeTaskTable">
             <thead><tr><th>任务</th><th>目标</th><th>模型</th><th>模式</th><th>周期(s)</th><th>状态</th><th>最近结果</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="glass panel probe-task-panel">
+        <div class="panel-head">
+          <h2>随流拨测任务列表</h2>
+          <button id="clearFollowProbeTasks" type="button" class="ghost-btn">清空随流任务</button>
+        </div>
+        <div class="table-scroll probe-task-scroll">
+          <table id="followProbeTaskTable">
+            <thead><tr><th>ID</th><th>小类</th><th>目标</th><th>模型</th><th>模式</th><th>最近触发Entry</th><th>最近结果</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -403,6 +419,7 @@
     function getHealthCfg() { const cfg = loadCfg('health_cfg') || {}; return { ...DEFAULT_HEALTH_CFG, ...cfg }; }
 
     let llmProbeTasks = [];
+    let llmFollowProbeTasks = [];
     let llmProbeRecords = [];
     let llmProbeBusy = new Set();
 
@@ -411,8 +428,10 @@
       const resp = await fetch('/api/probe/tasks');
       const data = await resp.json();
       llmProbeTasks = data.items || [];
+      llmFollowProbeTasks = data.follow_items || [];
       llmProbeRecords = data.records || [];
       renderProbeTasks();
+      renderFollowProbeTasks();
       renderProbeRecords();
     }
     function renderProbeRecords() {
@@ -513,6 +532,15 @@
         };
       });
     }
+    function renderFollowProbeTasks() {
+      if (!has('followProbeTaskTable')) return;
+      const tbody = $('followProbeTaskTable').querySelector('tbody');
+      tbody.innerHTML = llmFollowProbeTasks.map(task => `
+        <tr>
+          <td>${esc(task.id)}</td><td>${esc(task.category_minor)}</td><td>${esc(task.target)}</td><td>${esc(task.model)}</td><td>${esc(task.mode)}</td>
+          <td>${esc(task.last_triggered_entry_id || 0)}</td><td>${esc(task.last_message || '-')}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="subtle">暂无随流拨测任务</td></tr>';
+    }
 
     function renderTopology() {
       if (!has('topoRag')) return;
@@ -532,16 +560,15 @@
       const target = String(fd.get('target') || '').trim().replace(/\/+$/, '');
       const model = String(fd.get('model') || '').trim() || 'gpt-4o-mini';
       const apiKey = String(fd.get('api_key') || '').trim() || 'sk-xxxx';
+      const question = String(fd.get('question') || '').trim() || '你好';
+      const stream = String(fd.get('mode') || 'standard') === 'stream';
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
-      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
+      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: question }], stream }, null, 2);
       return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
     }
-    function updateProbeCurlPreview() {
-      if (!has('llmProbeForm') || !has('llmFinalCurlText')) return;
-      const form = $('llmProbeForm');
-      const passthrough = has('llmPassthrough') ? String($('llmPassthrough').value || 'false') : 'false';
-      const raw = has('llmRawCurl') ? String($('llmRawCurl').value || '').trim() : '';
-      $('llmFinalCurlText').textContent = (passthrough === 'true' && raw) ? raw : buildCurlTemplateFromFields(form);
+    function updateFinalCurl() {
+      if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
+      $('llmFinalCurlText').textContent = buildCurlTemplateFromFields($('llmProbeForm'));
     }
 
     function queryString() {
@@ -1017,7 +1044,20 @@
         const resp = await fetch('/api/probe/follow-tasks', { method: 'POST', body: fd });
         const data = await resp.json();
         $('status').textContent = data.ok ? '已添加随流任务。' : `添加随流任务失败：${data.message || '未知错误'}`;
+        await fetchProbeState();
       };
+      if (has('clearFollowProbeTasks')) $('clearFollowProbeTasks').onclick = async () => {
+        await fetch('/api/probe/follow-tasks/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = '随流拨测任务已清空。';
+      };
+      ['target', 'model', 'api_key', 'question', 'mode'].forEach((name) => {
+        const el = document.querySelector(`#llmProbeForm [name="${name}"]`);
+        if (!el) return;
+        el.addEventListener('input', updateFinalCurl);
+        el.addEventListener('change', updateFinalCurl);
+      });
+      updateFinalCurl();
       window.setInterval(async () => {
         try {
           await fetchProbeState();
@@ -1025,37 +1065,6 @@
           console.error(err);
         }
       }, 5000);
-      window.setInterval(async () => {
-        try {
-          const [entriesResp, followResp] = await Promise.all([fetch('/api/entries'), fetch('/api/probe/follow-tasks')]);
-          const entries = (await entriesResp.json()).items || [];
-          const followTasks = (await followResp.json()).items || [];
-          const redRows = entries.filter((e) => classifyStatus(e).cls === 'red');
-          for (const row of redRows) {
-            for (const task of followTasks) {
-              if ((row.category_minor || '') !== (task.category_minor || '')) continue;
-              if (Number(row.id || 0) <= Number(task.last_triggered_entry_id || 0)) continue;
-              const fd = new FormData();
-              fd.append('target', task.target || '');
-              fd.append('api_key', task.api_key || '');
-              fd.append('model', task.model || 'gpt-4o-mini');
-              fd.append('question', task.question || '你好');
-              fd.append('mode', task.mode || 'standard');
-              fd.append('timeout_sec', String(task.timeout_sec || '20'));
-              fd.append('trigger', `随流(${task.category_minor})#${row.id}`);
-              const triggerResp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
-              const triggerData = await triggerResp.json();
-              const markFd = new FormData();
-              markFd.append('entry_id', String(row.id || 0));
-              markFd.append('message', triggerData.message || '');
-              await fetch(`/api/probe/follow-tasks/${task.id}/triggered`, { method: 'POST', body: markFd });
-            }
-          }
-          if (redRows.length) await fetchProbeState();
-        } catch (err) {
-          console.error(err);
-        }
-      }, 8000);
     }
 
     if (has('detailQueryForm')) {
