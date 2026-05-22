@@ -261,10 +261,6 @@
           <div class="probe-response-head">LLM拨测结果</div>
           <pre id="llmProbeResultText">暂未发送请求。</pre>
         </div>
-        <div id="llmFinalCurlBox" class="probe-response">
-          <div class="probe-response-head">最终发送curl命令</div>
-          <pre id="llmFinalCurlText">等待生成...</pre>
-        </div>
       </section>
 
       <section class="glass panel probe-task-panel">
@@ -1009,15 +1005,15 @@
       if (has('llmRawCurl')) $('llmRawCurl').addEventListener('input', updateProbeCurlPreview);
       if (has('llmPassthrough')) $('llmPassthrough').addEventListener('change', updateProbeCurlPreview);
       updateProbeCurlPreview();
-      $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
+      $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); await fetchProbeState(); };
       if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
         const fd = new FormData($('llmProbeForm'));
         const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
         fd.set('schedule_interval_sec', String(sec));
         const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
         const data = await resp.json();
-        await fetchProbeState();
         $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
+        await fetchProbeState();
       };
       if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
         await Promise.all(llmProbeTasks.map(task => fetch(`/api/probe/tasks/${task.id}/stop`, { method: 'POST' })));
