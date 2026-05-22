@@ -259,7 +259,7 @@
         </form>
         <div id="llmFinalCurlBox" class="probe-response">
           <div class="probe-response-head">最终发送curl命令</div>
-          <pre id="llmFinalCurlText">等待生成...</pre>
+          <textarea id="llmFinalCurlText" rows="7" class="probe-curl-editor">等待生成...</textarea>
         </div>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
@@ -574,7 +574,13 @@
     }
     function updateFinalCurl() {
       if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
-      $('llmFinalCurlText').textContent = buildCurlTemplateFromFields($('llmProbeForm'));
+      $('llmFinalCurlText').value = buildCurlTemplateFromFields($('llmProbeForm'));
+    }
+    function collectProbeBaseFormData() {
+      const src = new FormData($('llmProbeForm'));
+      const fd = new FormData();
+      ['target', 'api_key', 'model', 'question', 'mode', 'timeout_sec'].forEach((k) => fd.append(k, String(src.get(k) || '')));
+      return fd;
     }
 
     function queryString() {
@@ -973,7 +979,7 @@
       const busyKey = 'single';
       if (!has('llmProbeForm') || llmProbeBusy.has(busyKey)) return;
       llmProbeBusy.add(busyKey);
-      const fd = new FormData($('llmProbeForm'));
+      const fd = collectProbeBaseFormData();
       fd.set('trigger', trigger);
       if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
       try {
@@ -1010,8 +1016,9 @@
       fetchProbeState().catch((err) => { console.error(err); $('status').textContent = `加载拨测任务失败：${err.message || err}`; });
       if (has('llmProbeStartBtn')) $('llmProbeStartBtn').addEventListener('click', async (e) => {
         e.preventDefault();
-        const fd = new FormData($('llmProbeForm'));
-        const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
+        const fd = collectProbeBaseFormData();
+        const raw = new FormData($('llmProbeForm'));
+        const sec = Math.max(5, Math.min(Number(raw.get('schedule_interval_sec') || 60), 86400));
         fd.set('schedule_interval_sec', String(sec));
         const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
         const data = await resp.json();
@@ -1034,8 +1041,9 @@
       };
       if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').addEventListener('click', async (e) => {
         e.preventDefault();
-        const fd = new FormData($('llmProbeForm'));
-        fd.set('category_minor', String(fd.get('follow_minor') || '').trim());
+        const fd = collectProbeBaseFormData();
+        const raw = new FormData($('llmProbeForm'));
+        fd.set('category_minor', String(raw.get('follow_minor') || '').trim());
         if (!String(fd.get('category_minor') || '').trim()) {
           $('status').textContent = '请先填写随流小类名称。';
           return;
