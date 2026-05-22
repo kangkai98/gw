@@ -586,16 +586,6 @@
       ['target', 'api_key', 'model', 'question', 'mode', 'timeout_sec'].forEach((k) => fd.append(k, String(src.get(k) || '')));
       return fd;
     }
-    function updateFinalCurl() {
-      if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
-      $('llmFinalCurlText').value = buildCurlTemplateFromFields($('llmProbeForm'));
-    }
-    function collectProbeBaseFormData() {
-      const src = new FormData($('llmProbeForm'));
-      const fd = new FormData();
-      ['target', 'api_key', 'model', 'question', 'mode', 'timeout_sec'].forEach((k) => fd.append(k, String(src.get(k) || '')));
-      return fd;
-    }
 
     function queryString() {
       if (!has('majorFilter')) return '';

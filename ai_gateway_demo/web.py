@@ -470,7 +470,6 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     body = json.dumps(payload, ensure_ascii=False)
     cmd = [
         "curl", "-sS", "-X", "POST",
-        "--max-time", str(max(2.0, min(float(timeout_sec), 90.0))),
         chat_url,
         *headers,
         "--data", body,
@@ -478,10 +477,26 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     if stream_mode:
         cmd.insert(1, "-N")
     t0 = time.perf_counter()
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "kind": "llm",
+            "availability": "不可用",
+            "message": f"拨测超时({timeout_value:.0f}s)",
+            "command": " ".join(shlex.quote(part) for part in cmd),
+        }
     latency_ms = (time.perf_counter() - t0) * 1000
     if proc.returncode != 0:
-        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}"}
+        return {
+            "ok": False,
+            "kind": "llm",
+            "availability": "不可用",
+            "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}",
+            "command": " ".join(shlex.quote(part) for part in cmd),
+        }
 
     out = proc.stdout or ""
     if stream_mode:
@@ -517,13 +532,13 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     try:
         parsed = json.loads(out)
     except Exception:
-        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "chat_url": chat_url, "message": "标准拨测失败"}
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "chat_url": chat_url, "message": "标准拨测失败", "command": " ".join(shlex.quote(part) for part in cmd)}
     choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
     message = choice.get("message") if isinstance(choice, dict) else {}
     short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
     if isinstance(parsed, dict) and parsed.get("error"):
-        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}"}
-    return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成"}
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "command": " ".join(shlex.quote(part) for part in cmd)}
+    return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
 def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
     parsed = urlparse(url)
     scheme = parsed.scheme or "http"
@@ -638,43 +653,6 @@ def _run_llm_probe(
         "stream": stream_mode,
     }
     return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
-
-
-def _build_llm_probe_curl(chat_url: str, api_key: str, payload: dict[str, Any]) -> str:
-    headers = ["-H 'Content-Type: application/json'"]
-    if api_key.strip():
-        headers.append(f"-H 'Authorization: Bearer {api_key.strip()}'")
-    payload_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return " ".join(["curl -X POST", shlex.quote(chat_url), *headers, "--data", shlex.quote(payload_text)])
-
-
-def _parse_curl_command(raw_curl: str) -> tuple[str, dict[str, str], str]:
-    parts = shlex.split(raw_curl or "")
-    if not parts or parts[0] != "curl":
-        raise ValueError("请输入以 curl 开头的命令")
-    headers: dict[str, str] = {}
-    body = ""
-    url = ""
-    i = 1
-    while i < len(parts):
-        item = parts[i]
-        if item in ("-H", "--header") and i + 1 < len(parts):
-            hv = parts[i + 1]
-            if ":" in hv:
-                k, v = hv.split(":", 1)
-                headers[k.strip()] = v.strip()
-            i += 2
-            continue
-        if item in ("-d", "--data", "--data-raw", "--data-binary") and i + 1 < len(parts):
-            body = parts[i + 1]
-            i += 2
-            continue
-        if item.startswith("http://") or item.startswith("https://"):
-            url = item
-        i += 1
-    if not url:
-        raise ValueError("curl 命令中缺少 URL")
-    return url, headers, body
 
 
 @app.post("/api/probe/llm")
