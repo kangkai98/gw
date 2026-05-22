@@ -247,10 +247,25 @@
             <button id="llmProbeSendBtn" type="submit">单次拨测</button>
             <button id="llmProbeStartBtn" type="button">添加周期任务</button>
           </div>
+          <label class="filter-item probe-full">
+            <span>原始curl透传（可选）</span>
+            <textarea id="llmRawCurl" name="raw_curl" rows="4" placeholder="粘贴完整 curl 命令；启用后按该命令透传"></textarea>
+          </label>
+          <label class="filter-item">
+            <span>启用透传</span>
+            <select name="passthrough" id="llmPassthrough">
+              <option value="false">否</option>
+              <option value="true">是</option>
+            </select>
+          </label>
         </form>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
           <pre id="llmProbeResultText">暂未发送请求。</pre>
+        </div>
+        <div id="llmFinalCurlBox" class="probe-response">
+          <div class="probe-response-head">最终发送curl命令</div>
+          <pre id="llmFinalCurlText">等待生成...</pre>
         </div>
       </section>
 
@@ -430,13 +445,12 @@
           container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
         } else {
           const groups = Array.from(byTask.entries());
-          const first = groups[0];
-          container.innerHTML = `
+          container.innerHTML = groups.map(([key, group]) => `
             <section class="probe-task-chart">
-              <h3>${esc(first[1].title)}</h3>
-              <canvas id="probeTrendChart-${esc(first[0])}"></canvas>
-            </section>`;
-          [first].forEach(([key, group]) => {
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          groups.forEach(([key, group]) => {
             const recent = group.records.slice(0, 50).reverse();
             const failHeightSec = 0.3;
             charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
@@ -527,6 +541,13 @@
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
       const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
       return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
+    }
+    function updateProbeCurlPreview() {
+      if (!has('llmProbeForm') || !has('llmFinalCurlText')) return;
+      const form = $('llmProbeForm');
+      const passthrough = has('llmPassthrough') ? String($('llmPassthrough').value || 'false') : 'false';
+      const raw = has('llmRawCurl') ? String($('llmRawCurl').value || '').trim() : '';
+      $('llmFinalCurlText').textContent = (passthrough === 'true' && raw) ? raw : buildCurlTemplateFromFields(form);
     }
 
     function queryString() {
@@ -944,6 +965,7 @@
         }
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
+        if (data.final_curl && has('llmFinalCurlText')) $('llmFinalCurlText').textContent = data.final_curl;
         if (has('llmProbeResultText')) $('llmProbeResultText').textContent = lines.join('\n');
         $('status').textContent = data.ok ? 'LLM 拨测完成。' : 'LLM 拨测失败。';
         await fetchProbeState();
@@ -958,6 +980,14 @@
 
     if (has('llmProbeForm')) {
       fetchProbeState();
+      ['target', 'model', 'api_key', 'question', 'mode'].forEach((name) => {
+        const el = document.querySelector(`#llmProbeForm [name="${name}"]`);
+        if (el) el.addEventListener('input', updateProbeCurlPreview);
+        if (el) el.addEventListener('change', updateProbeCurlPreview);
+      });
+      if (has('llmRawCurl')) $('llmRawCurl').addEventListener('input', updateProbeCurlPreview);
+      if (has('llmPassthrough')) $('llmPassthrough').addEventListener('change', updateProbeCurlPreview);
+      updateProbeCurlPreview();
       $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
       if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
         const fd = new FormData($('llmProbeForm'));
@@ -983,6 +1013,13 @@
         await fetchProbeState();
         $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
+      window.setInterval(async () => {
+        try {
+          await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 5000);
     }
 
     if (has('detailQueryForm')) {
