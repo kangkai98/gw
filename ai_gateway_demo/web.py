@@ -665,8 +665,38 @@ def api_probe_llm(
     mode: str = Form(default="standard"),
     timeout_sec: float = Form(default=20.0),
     trigger: str = Form(default=""),
+    raw_curl: str = Form(default=""),
+    passthrough: str = Form(default=""),
 ):
-    result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
+    if str(passthrough).strip().lower() in {"1", "true", "yes", "on"} and raw_curl.strip():
+        try:
+            parsed_url, parsed_headers, parsed_body = _parse_curl_command(raw_curl)
+            timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+            t0 = time.perf_counter()
+            status_code, raw, latency_ms = _http_post_json(
+                parsed_url,
+                json.loads(parsed_body or "{}"),
+                parsed_headers or {"Content-Type": "application/json"},
+                timeout_value,
+            )
+            result = {
+                "ok": status_code < 400,
+                "kind": "llm_passthrough",
+                "availability": "可用" if status_code < 400 else "不可用",
+                "status_code": status_code,
+                "latency_ms": round(latency_ms, 1),
+                "response_text": raw.decode("utf-8", errors="ignore")[:2000],
+                "chat_url": parsed_url,
+                "message": "透传拨测完成" if status_code < 400 else "透传拨测失败",
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
+                "final_curl": raw_curl.strip(),
+            }
+        except Exception as exc:
+            result = {"ok": False, "kind": "llm_passthrough", "availability": "不可用", "message": f"透传失败: {exc}", "final_curl": raw_curl.strip()}
+    else:
+        result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
+        payload = {"model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini", "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}], "stream": mode == "stream"}
+        result["final_curl"] = _build_llm_probe_curl(result.get("chat_url") or _to_chat_completions_url(target), api_key, payload)
     if trigger:
         _add_probe_record(
             {
