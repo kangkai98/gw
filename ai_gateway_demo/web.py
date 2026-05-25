@@ -673,6 +673,8 @@ def api_probe_llm(
     mode: str = Form(default="standard"),
     timeout_sec: float = Form(default=20.0),
     trigger: str = Form(default=""),
+    raw_curl: str = Form(default=""),
+    passthrough: str = Form(default=""),
 ):
     payload = {
         "model": (model or "gpt-4o-mini").strip() or "gpt-4o-mini",
@@ -765,6 +767,9 @@ def _run_llm_probe_with_deadline(params: dict[str, Any], deadline_sec: float) ->
             params.get("question", "你好"),
             params.get("mode", "standard"),
             float(params.get("timeout_sec") or deadline_sec),
+            params.get("system_prompt", ""),
+            params.get("reasoning_effort", ""),
+            params.get("thinking_type", ""),
         )
 
     t0 = time.perf_counter()
