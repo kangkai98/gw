@@ -176,6 +176,8 @@ class OnlineCaptureManager:
                 self._capture_one_window(interface, interval_sec, bpf_filter, file_path)
                 if self._stop_event.is_set() and (not file_path.exists() or file_path.stat().st_size == 0):
                     break
+                if not hasattr(self, "_analyze_window"):
+                    raise RuntimeError("在线监听内部错误：缺少 _analyze_window，请更新服务到最新版本")
                 detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._analyze_window(
                     file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
                 )
@@ -230,6 +232,27 @@ class OnlineCaptureManager:
                 raise RuntimeError(err or f"tcpdump 退出码 {proc.returncode}")
         finally:
             self._proc = None
+
+
+def _detect_capture_backend() -> str:
+    if shutil.which("tcpdump"):
+        return "tcpdump"
+    if shutil.which("dumpcap"):
+        return "dumpcap"
+    return ""
+
+
+def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filter: str, file_path: Path) -> list[str]:
+    if backend == "dumpcap":
+        cmd = ["dumpcap", "-i", interface, "-a", f"duration:{max(1, int(interval_sec))}", "-w", str(file_path)]
+        if bpf_filter:
+            cmd.extend(["-f", bpf_filter])
+        return cmd
+
+    cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", str(file_path)]
+    if bpf_filter:
+        cmd.extend(shlex.split(bpf_filter))
+    return cmd
 
     def _analyze_window(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
