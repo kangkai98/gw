@@ -287,7 +287,7 @@
         </div>
         <div class="table-scroll probe-task-scroll">
           <table id="followProbeTaskTable">
-            <thead><tr><th>ID</th><th>小类</th><th>目标</th><th>模型</th><th>模式</th><th>最近触发Entry</th><th>最近结果</th></tr></thead>
+            <thead><tr><th>ID</th><th>小类</th><th>目标</th><th>模型</th><th>模式</th><th>最近触发Entry</th><th>最近结果</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -545,7 +545,22 @@
         <tr>
           <td>${esc(task.id)}</td><td>${esc(task.category_minor)}</td><td>${esc(task.target)}</td><td>${esc(task.model)}</td><td>${esc(task.mode)}</td>
           <td>${esc(task.last_triggered_entry_id || 0)}</td><td>${esc(task.last_message || '-')}</td>
-        </tr>`).join('') || '<tr><td colspan="7" class="subtle">暂无随流拨测任务</td></tr>';
+          <td><button type="button" data-follow-action="toggle" data-follow-id="${task.id}">${task.thread_alive === false ? '启动' : '停止'}</button><button type="button" class="warn" data-follow-action="delete" data-follow-id="${task.id}">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="8" class="subtle">暂无随流拨测任务</td></tr>';
+      tbody.querySelectorAll('button[data-follow-action]').forEach(btn => {
+        btn.onclick = async () => {
+          const id = Number(btn.getAttribute('data-follow-id'));
+          const task = llmFollowProbeTasks.find(t => t.id === id);
+          if (!task) return;
+          if (btn.getAttribute('data-follow-action') === 'toggle') {
+            const action = task.thread_alive === false ? 'start' : 'stop';
+            await fetch(`/api/probe/follow-tasks/${id}/${action}`, { method: 'POST' });
+          } else {
+            await fetch(`/api/probe/follow-tasks/${id}`, { method: 'DELETE' });
+          }
+          await fetchProbeState();
+        };
+      });
     }
 
     function renderTopology() {
@@ -984,6 +999,7 @@
       if (!has('llmProbeForm') || llmProbeBusy.has(busyKey)) return;
       llmProbeBusy.add(busyKey);
       const fd = collectProbeBaseFormData();
+      if (has('llmFinalCurlText')) fd.set('final_curl', $('llmFinalCurlText').value || '');
       fd.set('trigger', trigger);
       if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
       try {

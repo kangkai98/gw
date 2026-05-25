@@ -65,6 +65,7 @@ class FollowProbeTask:
     params: dict[str, Any]
     last_triggered_entry_id: int = 0
     last_message: str = "-"
+    enabled: bool = True
 
 
 _probe_lock = threading.Lock()
@@ -114,7 +115,7 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
     if entry_id <= 0 or not minor:
         return
     with _probe_lock:
-        tasks = [t for t in _follow_probe_tasks.values() if t.category_minor == minor and entry_id > t.last_triggered_entry_id]
+        tasks = [t for t in _follow_probe_tasks.values() if t.enabled and t.category_minor == minor and entry_id > t.last_triggered_entry_id]
     for task in tasks:
         params = dict(task.params)
         result = _run_llm_probe(
@@ -466,6 +467,74 @@ def _build_llm_probe_curl(chat_url: str, api_key: str, payload: dict[str, Any]) 
     return "\n".join([f"curl {chat_url} \\", *[f"  {h} \\" for h in headers], f"  -d '{payload_text}'"])
 
 
+def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    try:
+        cmd = shlex.split(curl_command)
+    except Exception:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": "拨测异常: curl命令解析失败"}
+    if not cmd or cmd[0] != "curl":
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": "拨测异常: 命令必须以curl开头"}
+    t0 = time.perf_counter()
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    if stream_mode:
+        if "-N" not in cmd:
+            cmd.insert(1, "-N")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        collected: list[str] = []
+        ttfb_ms: float | None = None
+        ttft_ms: float | None = None
+        while True:
+            if time.perf_counter() - t0 > timeout_value + 5.0:
+                proc.kill()
+                return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
+            line = proc.stdout.readline() if proc.stdout else ""
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            now_ms = (time.perf_counter() - t0) * 1000
+            if ttfb_ms is None:
+                ttfb_ms = now_ms
+            text = line.strip()
+            if not text.startswith("data:"):
+                continue
+            payload_text = text[5:].strip()
+            if not payload_text or payload_text == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload_text)
+            except Exception:
+                continue
+            choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+            delta = choice.get("delta") if isinstance(choice, dict) else {}
+            if isinstance(delta, dict) and delta.get("content"):
+                if ttft_ms is None:
+                    ttft_ms = now_ms
+                collected.append(str(delta.get("content")))
+        stderr = (proc.stderr.read() if proc.stderr else "").strip()
+        rc = proc.wait(timeout=1)
+        if rc != 0:
+            return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        latency_ms = (time.perf_counter() - t0) * 1000
+        return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "ttfb_ms": None if ttfb_ms is None else round(ttfb_ms, 1), "ttft_ms": None if ttft_ms is None else round(ttft_ms, 1), "response_text": "".join(collected)[:2000], "message": "流式拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
+    latency_ms = (time.perf_counter() - t0) * 1000
+    if proc.returncode != 0:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+    out = proc.stdout or ""
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "message": "标准拨测失败", "command": " ".join(shlex.quote(part) for part in cmd)}
+    choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+    return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
+
+
 
 
 def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
@@ -483,57 +552,75 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
         cmd.insert(1, "-N")
     t0 = time.perf_counter()
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "kind": "llm",
-            "availability": "不可用",
-            "message": f"拨测超时({timeout_value:.0f}s)",
-            "command": " ".join(shlex.quote(part) for part in cmd),
-        }
-    latency_ms = (time.perf_counter() - t0) * 1000
-    if proc.returncode != 0:
-        return {
-            "ok": False,
-            "kind": "llm",
-            "availability": "不可用",
-            "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}",
-            "command": " ".join(shlex.quote(part) for part in cmd),
-        }
-
-    out = proc.stdout or ""
     if stream_mode:
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        except Exception as exc:
+            return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}", "command": " ".join(shlex.quote(part) for part in cmd)}
         collected: list[str] = []
-        for line in out.splitlines():
-            line = line.strip()
-            if not line.startswith("data:"):
-                continue
-            payload_text = line[5:].strip()
-            if not payload_text or payload_text == "[DONE]":
-                continue
-            try:
-                data = json.loads(payload_text)
-            except Exception:
-                continue
-            choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
-            delta = choice.get("delta") if isinstance(choice, dict) else {}
-            if isinstance(delta, dict) and delta.get("content"):
-                collected.append(str(delta.get("content")))
+        ttfb_ms: float | None = None
+        ttft_ms: float | None = None
+        try:
+            while True:
+                if time.perf_counter() - t0 > timeout_value + 5.0:
+                    proc.kill()
+                    return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
+                line = proc.stdout.readline() if proc.stdout else ""
+                if not line:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                now_ms = (time.perf_counter() - t0) * 1000
+                if ttfb_ms is None:
+                    ttfb_ms = now_ms
+                text = line.strip()
+                if not text.startswith("data:"):
+                    continue
+                payload_text = text[5:].strip()
+                if not payload_text or payload_text == "[DONE]":
+                    continue
+                try:
+                    data = json.loads(payload_text)
+                except Exception:
+                    continue
+                choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+                delta = choice.get("delta") if isinstance(choice, dict) else {}
+                if isinstance(delta, dict) and delta.get("content"):
+                    if ttft_ms is None:
+                        ttft_ms = now_ms
+                    collected.append(str(delta.get("content")))
+            stderr = (proc.stderr.read() if proc.stderr else "").strip()
+            rc = proc.wait(timeout=1)
+            if rc != 0:
+                return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+        latency_ms = (time.perf_counter() - t0) * 1000
         return {
             "ok": True,
             "kind": "llm_stream",
             "availability": "可用",
             "status_code": 200,
             "latency_ms": round(latency_ms, 1),
-            "ttfb_ms": None,
-            "ttft_ms": None,
+            "ttfb_ms": None if ttfb_ms is None else round(ttfb_ms, 1),
+            "ttft_ms": None if ttft_ms is None else round(ttft_ms, 1),
             "response_text": "".join(collected)[:2000],
             "chat_url": chat_url,
             "message": "流式拨测完成",
             "command": " ".join(shlex.quote(part) for part in cmd),
         }
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
+    latency_ms = (time.perf_counter() - t0) * 1000
+    if proc.returncode != 0:
+        return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {proc.stderr.strip() or proc.stdout.strip() or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+    out = proc.stdout or ""
 
     try:
         parsed = json.loads(out)
@@ -670,6 +757,7 @@ def api_probe_llm(
     question: str = Form(default="你好"),
     mode: str = Form(default="standard"),
     timeout_sec: float = Form(default=20.0),
+    final_curl: str = Form(default=""),
     trigger: str = Form(default=""),
     raw_curl: str = Form(default=""),
     passthrough: str = Form(default=""),
@@ -679,8 +767,10 @@ def api_probe_llm(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": (mode or "standard").strip() == "stream",
     }
-    result = _run_llm_probe(target, api_key, model, question, mode, timeout_sec)
-    result["final_curl"] = _build_llm_probe_curl(result.get("chat_url") or _to_chat_completions_url(target), api_key, payload)
+    rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(_to_chat_completions_url(target), api_key, payload)
+    result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
+    result["chat_url"] = _to_chat_completions_url(target)
+    result["final_curl"] = rendered_curl
     if trigger:
         _add_probe_record(
             {
@@ -705,7 +795,7 @@ def api_probe_llm(
 @app.get("/api/probe/follow-tasks")
 def api_probe_follow_tasks():
     with _probe_lock:
-        items = [dict(id=t.id, category_minor=t.category_minor, **t.params, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
+        items = [dict(id=t.id, category_minor=t.category_minor, **t.params, enabled=t.enabled, thread_alive=t.enabled, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
     return {"items": items}
 
 
@@ -749,6 +839,35 @@ def api_probe_follow_task_triggered(task_id: int, entry_id: int = Form(...), mes
         task.last_triggered_entry_id = max(task.last_triggered_entry_id, int(entry_id or 0))
         if message:
             task.last_message = message
+    return {"ok": True}
+
+
+@app.post("/api/probe/follow-tasks/{task_id}/stop")
+def api_probe_follow_task_stop(task_id: int):
+    with _probe_lock:
+        task = _follow_probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        task.enabled = False
+    return {"ok": True}
+
+
+@app.post("/api/probe/follow-tasks/{task_id}/start")
+def api_probe_follow_task_start(task_id: int):
+    with _probe_lock:
+        task = _follow_probe_tasks.get(task_id)
+        if not task:
+            return {"ok": False, "message": "任务不存在"}
+        task.enabled = True
+    return {"ok": True}
+
+
+@app.delete("/api/probe/follow-tasks/{task_id}")
+def api_probe_follow_task_delete(task_id: int):
+    with _probe_lock:
+        if task_id not in _follow_probe_tasks:
+            return {"ok": False, "message": "任务不存在"}
+        del _follow_probe_tasks[task_id]
     return {"ok": True}
 
 
@@ -866,7 +985,7 @@ def _stop_probe_task(task: ProbeTask) -> None:
 def api_probe_tasks():
     with _probe_lock:
         tasks = [_probe_task_view(task) for task in sorted(_probe_tasks.values(), key=lambda item: item.id)]
-        follow_tasks = [dict(id=t.id, category_minor=t.category_minor, **t.params, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
+        follow_tasks = [dict(id=t.id, category_minor=t.category_minor, **t.params, enabled=t.enabled, thread_alive=t.enabled, last_triggered_entry_id=t.last_triggered_entry_id, last_message=t.last_message) for t in sorted(_follow_probe_tasks.values(), key=lambda x: x.id)]
         records = list(_probe_records)
     return {"items": tasks, "follow_items": follow_tasks, "records": records}
 
