@@ -233,6 +233,27 @@ class OnlineCaptureManager:
         finally:
             self._proc = None
 
+
+def _detect_capture_backend() -> str:
+    if shutil.which("tcpdump"):
+        return "tcpdump"
+    if shutil.which("dumpcap"):
+        return "dumpcap"
+    return ""
+
+
+def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filter: str, file_path: Path) -> list[str]:
+    if backend == "dumpcap":
+        cmd = ["dumpcap", "-i", interface, "-a", f"duration:{max(1, int(interval_sec))}", "-w", str(file_path)]
+        if bpf_filter:
+            cmd.extend(["-f", bpf_filter])
+        return cmd
+
+    cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", str(file_path)]
+    if bpf_filter:
+        cmd.extend(shlex.split(bpf_filter))
+    return cmd
+
     def _analyze_window(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
     ) -> tuple[int, int, int, Path | None, int]:
