@@ -950,7 +950,7 @@
         const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
         const data = await resp.json();
         renderCaptureStatus(data);
-        $('status').textContent = data.ok ? `在线监听已启动（${backend}）。` : `在线监听启动失败：${data.message || '未知错误'}`;
+        $('status').textContent = data.ok ? '在线监听已启动。' : `在线监听启动失败：${data.message || '未知错误'}`;
       } catch (err) {
         $('status').textContent = `在线监听启动失败：${err.message || err}`;
       }
