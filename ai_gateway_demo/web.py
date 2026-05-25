@@ -124,9 +124,6 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
             params.get("question", "你好"),
             params.get("mode", "standard"),
             float(params.get("timeout_sec") or 20.0),
-            params.get("system_prompt", ""),
-            params.get("reasoning_effort", ""),
-            params.get("thinking_type", ""),
         )
         _add_probe_record(
             {
