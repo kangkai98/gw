@@ -468,12 +468,15 @@ def _build_llm_probe_curl(chat_url: str, api_key: str, payload: dict[str, Any]) 
 
 
 def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    normalized = (curl_command or "").replace("\\\n", " ").replace("\\\r\n", " ").strip()
     try:
-        cmd = shlex.split(curl_command)
+        cmd = shlex.split(normalized)
     except Exception:
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": "拨测异常: curl命令解析失败"}
     if not cmd or cmd[0] != "curl":
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": "拨测异常: 命令必须以curl开头"}
+    if "-s" not in cmd and "--silent" not in cmd:
+        cmd.insert(1, "-sS")
     t0 = time.perf_counter()
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     if stream_mode:
