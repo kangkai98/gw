@@ -108,8 +108,16 @@ def _is_red_entry(entry: dict[str, Any]) -> bool:
 
 
 def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
-    entry_id = int(entry.get("id") or 0)
-    minor = str(entry.get("category_minor") or "").strip()
+    resolved_entry = dict(entry or {})
+    entry_id = int(resolved_entry.get("id") or 0)
+    if entry_id <= 0:
+        start_real = resolved_entry.get("start_time_real")
+        if start_real:
+            latest = list_entries(start_real=start_real, end_real=start_real)
+            if latest:
+                resolved_entry = dict(latest[0])
+                entry_id = int(resolved_entry.get("id") or 0)
+    minor = str(resolved_entry.get("category_minor") or "").strip()
     if entry_id <= 0 or not minor:
         return
     with _probe_lock:
@@ -118,7 +126,7 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
         params = dict(task.params)
         ttft_alert = float(params.get("ttft_alert") or DEFAULT_HEALTH_CFG["ttft_alert"])
         tpot_alert = float(params.get("tpot_alert") or DEFAULT_HEALTH_CFG["tpot_alert"])
-        if float(entry.get("ttft_ms") or 0.0) < ttft_alert and float(entry.get("tpot_ms_per_token") or 0.0) < tpot_alert:
+        if float(resolved_entry.get("ttft_ms") or 0.0) < ttft_alert and float(resolved_entry.get("tpot_ms_per_token") or 0.0) < tpot_alert:
             continue
         result = _run_llm_probe(
             params.get("target", ""),
