@@ -323,6 +323,27 @@ def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filt
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
 
+def _detect_capture_backend() -> str:
+    if shutil.which("tcpdump"):
+        return "tcpdump"
+    if shutil.which("dumpcap"):
+        return "dumpcap"
+    return ""
+
+
+def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filter: str, file_path: Path) -> list[str]:
+    if backend == "dumpcap":
+        cmd = ["dumpcap", "-i", interface, "-a", f"duration:{max(1, int(interval_sec))}", "-w", str(file_path)]
+        if bpf_filter:
+            cmd.extend(["-f", bpf_filter])
+        return cmd
+
+    cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", str(file_path)]
+    if bpf_filter:
+        cmd.extend(shlex.split(bpf_filter))
+    return cmd
+
+
 def _extract_cached_tcp_packets(pcap_path: Path, start_seq: int = 0) -> list[CachedTcpPacket]:
     result: list[CachedTcpPacket] = []
     with PcapReader(str(pcap_path)) as reader:
