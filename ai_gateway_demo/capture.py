@@ -83,6 +83,7 @@ class OnlineCaptureManager:
     def start(
         self,
         interface: str,
+        preferred_backend: str = "",
         interval_sec: int = 60,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 120,
@@ -92,7 +93,7 @@ class OnlineCaptureManager:
         interface = (interface or "").strip()
         if not interface:
             raise ValueError("interface 不能为空")
-        backend = _detect_capture_backend()
+        backend = _detect_capture_backend(preferred_backend)
         if not backend:
             system_name = platform.system().lower()
             raise RuntimeError(
@@ -175,6 +176,8 @@ class OnlineCaptureManager:
                 self._capture_one_window(interface, interval_sec, bpf_filter, file_path)
                 if self._stop_event.is_set() and (not file_path.exists() or file_path.stat().st_size == 0):
                     break
+                if not hasattr(self, "_analyze_window"):
+                    raise RuntimeError("在线监听内部错误：缺少 _analyze_window，请更新服务到最新版本")
                 detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._analyze_window(
                     file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
                 )
@@ -323,7 +326,12 @@ def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filt
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
 
-def _detect_capture_backend() -> str:
+def _detect_capture_backend(preferred_backend: str = "") -> str:
+    preferred = (preferred_backend or "").strip().lower()
+    if preferred in {"linux", "tcpdump"} and shutil.which("tcpdump"):
+        return "tcpdump"
+    if preferred in {"windows", "dumpcap"} and shutil.which("dumpcap"):
+        return "dumpcap"
     if shutil.which("tcpdump"):
         return "tcpdump"
     if shutil.which("dumpcap"):

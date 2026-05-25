@@ -261,6 +261,7 @@ def api_capture_status():
 @app.post("/api/capture/start")
 def api_capture_start(
     interface: str = Form(...),
+    capture_backend: str = Form(default=""),
     interval_sec: int = Form(default=60),
     bpf_filter: str = Form(default="tcp"),
     idle_timeout_sec: int = Form(default=120),
@@ -270,6 +271,7 @@ def api_capture_start(
     try:
         status = capture_manager.start(
             interface=interface,
+            preferred_backend=capture_backend,
             interval_sec=interval_sec,
             bpf_filter=bpf_filter,
             idle_timeout_sec=idle_timeout_sec,
