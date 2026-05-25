@@ -469,10 +469,10 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
         headers += ["-H", f"Authorization: Bearer {api_key.strip()}"]
     body = json.dumps(payload, ensure_ascii=False)
     cmd = [
-        "curl", "-sS", "-X", "POST",
+        "curl", "-sS", "--http1.1", "-X", "POST",
         chat_url,
         *headers,
-        "--data", body,
+        "--data-raw", body,
     ]
     if stream_mode:
         cmd.insert(1, "-N")
@@ -527,6 +527,7 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
             "response_text": "".join(collected)[:2000],
             "chat_url": chat_url,
             "message": "流式拨测完成",
+            "command": " ".join(shlex.quote(part) for part in cmd),
         }
 
     try:
