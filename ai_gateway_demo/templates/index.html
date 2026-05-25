@@ -243,17 +243,27 @@
             <span>周期拨测(秒)</span>
             <input name="schedule_interval_sec" type="number" min="5" max="86400" step="1" value="30" />
           </label>
+          <label class="filter-item">
+            <span>随流小类名称</span>
+            <input name="follow_minor" id="llmFollowMinor" placeholder="例如：知识助手" />
+          </label>
           <div class="actions probe-full">
             <button id="llmProbeSendBtn" type="submit">单次拨测</button>
             <button id="llmProbeStartBtn" type="button">添加周期任务</button>
+            <button id="llmProbeFollowBtn" type="button">添加随流任务</button>
           </div>
         </form>
+        <div id="llmFinalCurlBox" class="probe-response">
+          <div class="probe-response-head">最终发送curl命令</div>
+          <textarea id="llmFinalCurlText" rows="7" class="probe-curl-editor">等待生成...</textarea>
+        </div>
         <div id="llmProbeResult" class="probe-response">
           <div class="probe-response-head">LLM拨测结果</div>
           <pre id="llmProbeResultText">暂未发送请求。</pre>
         </div>
       </section>
 
+      <div class="grid-two">
       <section class="glass panel probe-task-panel">
         <div class="panel-head">
           <h2>周期拨测任务列表</h2>
@@ -266,6 +276,19 @@
           </table>
         </div>
       </section>
+      <section class="glass panel probe-task-panel">
+        <div class="panel-head">
+          <h2>随流拨测任务列表</h2>
+          <button id="clearFollowProbeTasks" type="button" class="ghost-btn">清空随流任务</button>
+        </div>
+        <div class="table-scroll probe-task-scroll">
+          <table id="followProbeTaskTable">
+            <thead><tr><th>ID</th><th>小类</th><th>目标</th><th>模型</th><th>模式</th><th>最近触发Entry</th><th>最近结果</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      </div>
 
       <section class="glass panel probe-record-panel">
         <div class="panel-head">
@@ -394,6 +417,7 @@
     function getHealthCfg() { const cfg = loadCfg('health_cfg') || {}; return { ...DEFAULT_HEALTH_CFG, ...cfg }; }
 
     let llmProbeTasks = [];
+    let llmFollowProbeTasks = [];
     let llmProbeRecords = [];
     let llmProbeBusy = new Set();
 
@@ -402,9 +426,15 @@
       const resp = await fetch('/api/probe/tasks');
       const data = await resp.json();
       llmProbeTasks = data.items || [];
+      llmFollowProbeTasks = data.follow_items || [];
       llmProbeRecords = data.records || [];
       renderProbeTasks();
+      renderFollowProbeTasks();
       renderProbeRecords();
+    }
+    async function parseJsonSafe(resp) {
+      const text = await resp.text();
+      try { return JSON.parse(text); } catch { return { ok: false, message: text || `HTTP ${resp.status}` }; }
     }
     function renderProbeRecords() {
       const records = llmProbeRecords || [];
@@ -430,13 +460,12 @@
           container.innerHTML = '<p class="subtle">暂无拨测统计数据</p>';
         } else {
           const groups = Array.from(byTask.entries());
-          const first = groups[0];
-          container.innerHTML = `
+          container.innerHTML = groups.map(([key, group]) => `
             <section class="probe-task-chart">
-              <h3>${esc(first[1].title)}</h3>
-              <canvas id="probeTrendChart-${esc(first[0])}"></canvas>
-            </section>`;
-          [first].forEach(([key, group]) => {
+              <h3>${esc(group.title)}</h3>
+              <canvas id="probeTrendChart-${esc(key)}"></canvas>
+            </section>`).join('');
+          groups.forEach(([key, group]) => {
             const recent = group.records.slice(0, 50).reverse();
             const failHeightSec = 0.3;
             charts[`probeTrend:${key}`] = new Chart($(`probeTrendChart-${key}`), {
@@ -505,6 +534,15 @@
         };
       });
     }
+    function renderFollowProbeTasks() {
+      if (!has('followProbeTaskTable')) return;
+      const tbody = $('followProbeTaskTable').querySelector('tbody');
+      tbody.innerHTML = llmFollowProbeTasks.map(task => `
+        <tr>
+          <td>${esc(task.id)}</td><td>${esc(task.category_minor)}</td><td>${esc(task.target)}</td><td>${esc(task.model)}</td><td>${esc(task.mode)}</td>
+          <td>${esc(task.last_triggered_entry_id || 0)}</td><td>${esc(task.last_message || '-')}</td>
+        </tr>`).join('') || '<tr><td colspan="7" class="subtle">暂无随流拨测任务</td></tr>';
+    }
 
     function renderTopology() {
       if (!has('topoRag')) return;
@@ -523,10 +561,26 @@
       const fd = new FormData(form);
       const target = String(fd.get('target') || '').trim().replace(/\/+$/, '');
       const model = String(fd.get('model') || '').trim() || 'gpt-4o-mini';
-      const apiKey = String(fd.get('api_key') || '').trim() || 'sk-xxxx';
+      const apiKey = String(fd.get('api_key') || '').trim() || '${DEEPSEEK_API_KEY}';
+      const question = String(fd.get('question') || '').trim() || '你好';
+      const stream = String(fd.get('mode') || 'standard') === 'stream';
       const chatUrl = target ? (target.includes('/chat/completions') ? target : (target.endsWith('/v1') ? `${target}/chat/completions` : `${target}/v1/chat/completions`)) : 'http://127.0.0.1:8000/v1/chat/completions';
-      const payload = JSON.stringify({ model, messages: [{ role: 'user', content: '你好' }], stream: false }, null, 0);
-      return `curl -X POST '${chatUrl}' \\\n  -H 'Authorization: Bearer ${apiKey}' \\\n  -H 'Content-Type: application/json' \\\n  --data '${payload}'`;
+      const payloadObj = { model, messages: [{ role: 'user', content: question }], stream };
+      const payload = JSON.stringify(payloadObj, null, 2);
+      return `curl ${chatUrl} \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${apiKey}" \\
+  -d '${payload}'`;
+    }
+    function updateFinalCurl() {
+      if (!has('llmFinalCurlText') || !has('llmProbeForm')) return;
+      $('llmFinalCurlText').value = buildCurlTemplateFromFields($('llmProbeForm'));
+    }
+    function collectProbeBaseFormData() {
+      const src = new FormData($('llmProbeForm'));
+      const fd = new FormData();
+      ['target', 'api_key', 'model', 'question', 'mode', 'timeout_sec'].forEach((k) => fd.append(k, String(src.get(k) || '')));
+      return fd;
     }
 
     function queryString() {
@@ -925,12 +979,12 @@
       const busyKey = 'single';
       if (!has('llmProbeForm') || llmProbeBusy.has(busyKey)) return;
       llmProbeBusy.add(busyKey);
-      const fd = new FormData($('llmProbeForm'));
+      const fd = collectProbeBaseFormData();
       fd.set('trigger', trigger);
       if (has('llmProbeSendBtn')) { $('llmProbeSendBtn').disabled = true; $('llmProbeSendBtn').textContent = '拨测中...'; }
       try {
         const resp = await fetch('/api/probe/llm', { method: 'POST', body: fd });
-        const data = await resp.json();
+        const data = await parseJsonSafe(resp);
         const mode = String(fd.get('mode') || 'standard');
         const lines = [
           `触发方式: ${trigger}`,
@@ -957,17 +1011,19 @@
     }
 
     if (has('llmProbeForm')) {
-      fetchProbeState();
-      $('llmProbeForm').onsubmit = async (e) => { e.preventDefault(); await runLlmProbe('单次'); };
-      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').onclick = async () => {
-        const fd = new FormData($('llmProbeForm'));
-        const sec = Math.max(5, Math.min(Number(fd.get('schedule_interval_sec') || 60), 86400));
+      $('llmProbeForm').addEventListener('submit', async (e) => { e.preventDefault(); await runLlmProbe('单次'); return false; });
+      fetchProbeState().catch((err) => { console.error(err); $('status').textContent = `加载拨测任务失败：${err.message || err}`; });
+      if (has('llmProbeStartBtn')) $('llmProbeStartBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const fd = collectProbeBaseFormData();
+        const raw = new FormData($('llmProbeForm'));
+        const sec = Math.max(5, Math.min(Number(raw.get('schedule_interval_sec') || 60), 86400));
         fd.set('schedule_interval_sec', String(sec));
         const resp = await fetch('/api/probe/tasks', { method: 'POST', body: fd });
         const data = await resp.json();
         await fetchProbeState();
         $('status').textContent = data.ok ? `已添加 ${data.task?.task_name || '周期任务'}，每 ${sec} 秒拨测一次。` : `添加周期任务失败：${data.message || '未知错误'}`;
-      };
+      });
       if (has('llmProbeStopBtn')) $('llmProbeStopBtn').onclick = async () => {
         await Promise.all(llmProbeTasks.map(task => fetch(`/api/probe/tasks/${task.id}/stop`, { method: 'POST' })));
         await fetchProbeState();
@@ -983,6 +1039,40 @@
         await fetchProbeState();
         $('status').textContent = llmProbeTasks.length ? '拨测记录已清空；当前仍有任务运行，序号保持不变。' : '拨测记录已清空，任务序号已重置。';
       };
+      if (has('llmProbeFollowBtn')) $('llmProbeFollowBtn').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const fd = collectProbeBaseFormData();
+        const raw = new FormData($('llmProbeForm'));
+        fd.set('category_minor', String(raw.get('follow_minor') || '').trim());
+        if (!String(fd.get('category_minor') || '').trim()) {
+          $('status').textContent = '请先填写随流小类名称。';
+          return;
+        }
+        const resp = await fetch('/api/probe/follow-tasks', { method: 'POST', body: fd });
+        const data = await parseJsonSafe(resp);
+        $('status').textContent = data.ok ? '已添加随流任务。' : `添加随流任务失败：${data.message || '未知错误'}`;
+        await fetchProbeState();
+      });
+      if (has('clearFollowProbeTasks')) $('clearFollowProbeTasks').onclick = async () => {
+        await fetch('/api/probe/follow-tasks/clear', { method: 'POST' });
+        await fetchProbeState();
+        $('status').textContent = '随流拨测任务已清空。';
+      };
+      ['target', 'model', 'api_key', 'question', 'mode'].forEach((name) => {
+        const el = document.querySelector(`#llmProbeForm [name="${name}"]`);
+        if (!el) return;
+        el.addEventListener('input', updateFinalCurl);
+        el.addEventListener('change', updateFinalCurl);
+      });
+      updateFinalCurl();
+      window.setInterval(async () => {
+        try {
+          await fetchProbeState();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 5000);
+
     }
 
     if (has('detailQueryForm')) {
