@@ -134,7 +134,7 @@
           <label class="filter-item"><span>单流最长缓存(秒)</span><input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required /></label>
           <label class="filter-item"><span>PCAP保留时长(秒)</span><input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required /></label>
           <label class="filter-item"><span>BPF过滤表达式</span><input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" /></label>
-          <button aria-label="Linux开始在线监听" type="button" id="startCaptureLinux">Linux开始监听</button>
+          <button aria-label="开始在线监听" type="submit">开始监听</button>
           <button aria-label="Windows开始在线监听" type="button" id="startCaptureWindows">Windows开始监听</button>
           <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
         </form>
@@ -955,7 +955,18 @@
         $('status').textContent = `在线监听启动失败：${err.message || err}`;
       }
     }
-    if (has('startCaptureLinux')) $('startCaptureLinux').onclick = async () => startCaptureByBackend('linux');
+    if (has('captureForm')) $('captureForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderCaptureStatus(data);
+        $('status').textContent = data.ok ? `在线监听已启动（${backend}）。` : `在线监听启动失败：${data.message || '未知错误'}`;
+      } catch (err) {
+        $('status').textContent = `在线监听启动失败：${err.message || err}`;
+      }
+    };
     if (has('startCaptureWindows')) $('startCaptureWindows').onclick = async () => startCaptureByBackend('windows');
     if (has('stopCapture')) $('stopCapture').onclick = async () => {
       const resp = await fetch('/api/capture/stop', { method: 'POST' });
