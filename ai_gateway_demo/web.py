@@ -152,6 +152,9 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
                 live.last_message = str(result.get("message") or "-")
 
 
+capture_manager.on_entry_inserted = _maybe_trigger_follow_for_entry
+
+
 @app.on_event("startup")
 def startup_online_capture() -> None:
     interface = os.getenv("AI_GATEWAY_LISTEN_INTERFACE", "").strip()
