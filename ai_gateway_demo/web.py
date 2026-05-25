@@ -652,6 +652,7 @@ def _run_llm_probe(
     question: str = "你好",
     mode: str = "standard",
     timeout_sec: float = 20.0,
+    *_: Any,
 ) -> dict[str, Any]:
     chat_url = _to_chat_completions_url(target)
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
