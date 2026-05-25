@@ -281,6 +281,29 @@ def api_capture_start(
         return {**capture_manager.status(), "ok": False, "message": str(exc)}
 
 
+@app.post("/api/capture/start-windows")
+def api_capture_start_windows(
+    interface: str = Form(...),
+    interval_sec: int = Form(default=60),
+    bpf_filter: str = Form(default="tcp"),
+    idle_timeout_sec: int = Form(default=120),
+    max_flow_duration_sec: int = Form(default=300),
+    pcap_retention_sec: int = Form(default=0),
+):
+    try:
+        status = capture_manager.start_windows(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+            max_flow_duration_sec=max_flow_duration_sec,
+            pcap_retention_sec=pcap_retention_sec,
+        )
+        return {"ok": True, **status}
+    except Exception as exc:
+        return {**capture_manager.status(), "ok": False, "message": str(exc)}
+
+
 @app.post("/api/capture/stop")
 def api_capture_stop():
     return {"ok": True, **capture_manager.stop()}
