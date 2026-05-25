@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from scapy.all import IP, TCP, PcapReader, wrpcap
 
@@ -61,6 +61,7 @@ class CaptureStatus:
 @dataclass
 class OnlineCaptureManager:
     output_dir: Path = CAPTURE_PATH
+    on_entry_inserted: Callable[[dict[str, Any]], None] | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _stop_event: threading.Event = field(default_factory=threading.Event, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
@@ -250,7 +251,16 @@ class OnlineCaptureManager:
 
         configs = list_self_hosted()
         entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
-        inserted = sum(1 for entry in entries if insert_entry(entry))
+        inserted = 0
+        for entry in entries:
+            if not insert_entry(entry):
+                continue
+            inserted += 1
+            if self.on_entry_inserted:
+                try:
+                    self.on_entry_inserted(entry)
+                except Exception:
+                    pass
 
         for key in ready_keys:
             self._flow_cache.pop(key, None)
