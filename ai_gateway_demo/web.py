@@ -108,8 +108,6 @@ def _is_red_entry(entry: dict[str, Any]) -> bool:
 
 
 def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
-    if not _is_red_entry(entry):
-        return
     entry_id = int(entry.get("id") or 0)
     minor = str(entry.get("category_minor") or "").strip()
     if entry_id <= 0 or not minor:
@@ -118,6 +116,10 @@ def _maybe_trigger_follow_for_entry(entry: dict[str, Any]) -> None:
         tasks = [t for t in _follow_probe_tasks.values() if t.enabled and t.category_minor == minor and entry_id > t.last_triggered_entry_id]
     for task in tasks:
         params = dict(task.params)
+        ttft_alert = float(params.get("ttft_alert") or DEFAULT_HEALTH_CFG["ttft_alert"])
+        tpot_alert = float(params.get("tpot_alert") or DEFAULT_HEALTH_CFG["tpot_alert"])
+        if float(entry.get("ttft_ms") or 0.0) < ttft_alert and float(entry.get("tpot_ms_per_token") or 0.0) < tpot_alert:
+            continue
         result = _run_llm_probe(
             params.get("target", ""),
             params.get("api_key", ""),
@@ -811,13 +813,15 @@ def api_probe_follow_task_add(
     question: str = Form(default="你好"),
     mode: str = Form(default="standard"),
     timeout_sec: float = Form(default=20.0),
+    ttft_alert: float = Form(default=3500.0),
+    tpot_alert: float = Form(default=180.0),
 ):
     global _next_follow_probe_task_id
     with _probe_lock:
         task = FollowProbeTask(
             id=_next_follow_probe_task_id,
             category_minor=(category_minor or "").strip(),
-            params={"target": target.strip(), "api_key": api_key.strip(), "model": model.strip() or "gpt-4o-mini", "question": question.strip() or "你好", "mode": mode.strip() or "standard", "timeout_sec": str(max(2.0, min(float(timeout_sec), 90.0)))},
+            params={"target": target.strip(), "api_key": api_key.strip(), "model": model.strip() or "gpt-4o-mini", "question": question.strip() or "你好", "mode": mode.strip() or "standard", "timeout_sec": str(max(2.0, min(float(timeout_sec), 90.0))), "ttft_alert": str(float(ttft_alert)), "tpot_alert": str(float(tpot_alert))},
         )
         _next_follow_probe_task_id += 1
         _follow_probe_tasks[task.id] = task

@@ -252,10 +252,6 @@
             <button id="llmProbeStartBtn" type="button">添加周期任务</button>
             <button id="llmProbeFollowBtn" type="button">添加随流任务</button>
           </div>
-          <label class="filter-item">
-            <span>随流小类名称</span>
-            <input name="follow_minor" id="llmFollowMinor" placeholder="例如：知识助手" />
-          </label>
         </form>
         <div id="llmFinalCurlBox" class="probe-response">
           <div class="probe-response-head">最终发送curl命令</div>
@@ -1063,7 +1059,10 @@
         e.preventDefault();
         const fd = collectProbeBaseFormData();
         const raw = new FormData($('llmProbeForm'));
+        const health = getHealthCfg();
         fd.set('category_minor', String(raw.get('follow_minor') || '').trim());
+        fd.set('ttft_alert', String(Number(health.ttft_alert || DEFAULT_HEALTH_CFG.ttft_alert)));
+        fd.set('tpot_alert', String(Number(health.tpot_alert || DEFAULT_HEALTH_CFG.tpot_alert)));
         if (!String(fd.get('category_minor') || '').trim()) {
           $('status').textContent = '请先填写随流小类名称。';
           return;
