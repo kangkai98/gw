@@ -820,7 +820,7 @@ function UploadPanel({ uploadFileName, uploadProgress, onFileChange, onUpload, o
   `;
 }
 
-function CapturePanel({ capture, form, setForm, onStart, onStop, busy }) {
+function CapturePanel({ capture, form, setForm, onStart, onStartWindows, onStop, busy }) {
   const running = Boolean(capture?.running);
   return html`
     <div className="rounded-[26px] border border-white/8 bg-white/[0.04] p-5">
@@ -831,16 +831,17 @@ function CapturePanel({ capture, form, setForm, onStart, onStop, busy }) {
         </div>
         <div className=${`rounded-full border px-3 py-1 text-xs ${running ? 'border-emerald-300/20 bg-emerald-300/10 text-emerald-100' : 'border-white/8 bg-white/[0.04] text-slate-300'}`}>${running ? 'Running' : 'Stopped'}</div>
       </div>
-      <div className="grid gap-3 md:grid-cols-[1fr_110px_130px_130px_130px]">
-        <input value=${form.interface} onInput=${(e) => setForm((s) => ({ ...s, interface: e.target.value }))} placeholder="网卡名，如 eth0 / en0 / any" className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
-        <input value=${form.interval_sec} type="number" min="5" step="1" title="采集周期（秒）" onInput=${(e) => setForm((s) => ({ ...s, interval_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
-        <input value=${form.idle_timeout_sec} type="number" min="5" step="1" title="流空闲超时（秒）" onInput=${(e) => setForm((s) => ({ ...s, idle_timeout_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
-        <input value=${form.max_flow_duration_sec} type="number" min="0" step="1" title="单流最长缓存（秒，0 表示不限制）" onInput=${(e) => setForm((s) => ({ ...s, max_flow_duration_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
-        <input value=${form.pcap_retention_sec} type="number" min="0" step="1" title="pcap保留时长（秒，0 表示分析后删除）" onInput=${(e) => setForm((s) => ({ ...s, pcap_retention_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <label className="grid gap-1"><span className="text-xs text-slate-400">网卡名</span><input value=${form.interface} onInput=${(e) => setForm((s) => ({ ...s, interface: e.target.value }))} placeholder="如 eth0 / en0 / any / 1" className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
+        <label className="grid gap-1"><span className="text-xs text-slate-400">采集周期（秒）</span><input value=${form.interval_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, interval_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
+        <label className="grid gap-1"><span className="text-xs text-slate-400">流空闲超时（秒）</span><input value=${form.idle_timeout_sec} type="number" min="5" step="1" onInput=${(e) => setForm((s) => ({ ...s, idle_timeout_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
+        <label className="grid gap-1"><span className="text-xs text-slate-400">单流最长缓存（秒）</span><input value=${form.max_flow_duration_sec} type="number" min="0" step="1" onInput=${(e) => setForm((s) => ({ ...s, max_flow_duration_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
+        <label className="grid gap-1"><span className="text-xs text-slate-400">pcap保留时长（秒）</span><input value=${form.pcap_retention_sec} type="number" min="0" step="1" onInput=${(e) => setForm((s) => ({ ...s, pcap_retention_sec: e.target.value }))} className="rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
+        <label className="grid gap-1 xl:col-span-3"><span className="text-xs text-slate-400">BPF过滤表达式</span><input value=${form.bpf_filter} onInput=${(e) => setForm((s) => ({ ...s, bpf_filter: e.target.value }))} placeholder="默认 tcp，可填 tcp port 443" className="w-full rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" /></label>
       </div>
-      <input value=${form.bpf_filter} onInput=${(e) => setForm((s) => ({ ...s, bpf_filter: e.target.value }))} placeholder="BPF过滤表达式，默认 tcp，可填 tcp port 443" className="mt-3 w-full rounded-[20px] border border-white/8 bg-black/20 px-4 py-3 text-sm text-white outline-none placeholder:text-slate-500" />
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <button onClick=${onStart} disabled=${busy || running || !form.interface.trim()} className="rounded-[20px] border border-emerald-300/20 bg-emerald-400/12 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">开始监听</button>
+      <div className="mt-4 grid grid-cols-3 gap-3">
+        <button onClick=${onStart} disabled=${busy || running || !form.interface.trim()} className="rounded-[20px] border border-emerald-300/20 bg-emerald-400/12 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">Linux开始监听</button>
+        <button onClick=${onStartWindows} disabled=${busy || running || !form.interface.trim()} className="rounded-[20px] border border-sky-300/20 bg-sky-400/12 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50">Windows开始监听</button>
         <button onClick=${onStop} disabled=${busy || !running} className="rounded-[20px] border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-50 disabled:cursor-not-allowed disabled:opacity-50">停止监听</button>
       </div>
       <div className="mt-4 rounded-[20px] border border-white/8 bg-black/20 p-4 text-xs leading-6 text-slate-400">
@@ -1029,6 +1030,29 @@ function App() {
     }
   };
 
+
+
+  const onStartWindowsCapture = async () => {
+    setBusy(true);
+    try {
+      const result = await postForm('/api/capture/start-windows', {
+        interface: captureForm.interface.trim(),
+        interval_sec: captureForm.interval_sec || '60',
+        idle_timeout_sec: captureForm.idle_timeout_sec || '120',
+        max_flow_duration_sec: captureForm.max_flow_duration_sec || '300',
+        pcap_retention_sec: captureForm.pcap_retention_sec || '0',
+        bpf_filter: captureForm.bpf_filter || 'tcp',
+      });
+      setCapture(result || {});
+      setStatus(result.ok ? 'Windows在线监听已启动。' : `Windows在线监听启动失败：${result.message || '未知错误'}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(`Windows在线监听启动失败：${error.message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onStopCapture = async () => {
     setBusy(true);
     try {
@@ -1112,6 +1136,7 @@ function App() {
                     form=${captureForm}
                     setForm=${setCaptureForm}
                     onStart=${onStartCapture}
+                    onStartWindows=${onStartWindowsCapture}
                     onStop=${onStopCapture}
                     busy=${busy}
                   />
