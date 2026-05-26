@@ -388,9 +388,10 @@ class OnlineCaptureManager:
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
                 bpf_filter=bpf_filter,
+                capture_mode=mode,
                 started_at=now,
                 message=(
-                    f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
+                    f"在线监听已启动（{mode}）：{interface}，每 {interval_sec} 秒采集一次，"
                     f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
                 ),
             )
@@ -555,6 +556,82 @@ class OnlineCaptureManager:
             self._thread.start()
             return dict(self._status.__dict__)
 
+    def start_windows(
+        self,
+        interface: str,
+        interval_sec: int = 60,
+        bpf_filter: str = "tcp",
+        idle_timeout_sec: int = 120,
+        max_flow_duration_sec: int = 300,
+        pcap_retention_sec: int = 0,
+    ) -> dict[str, Any]:
+        return self._start_with_mode(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+            max_flow_duration_sec=max_flow_duration_sec,
+            pcap_retention_sec=pcap_retention_sec,
+            mode="windows",
+        )
+
+    def _start_with_mode(
+        self,
+        interface: str,
+        interval_sec: int,
+        bpf_filter: str,
+        idle_timeout_sec: int,
+        max_flow_duration_sec: int,
+        pcap_retention_sec: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        interface = (interface or "").strip()
+        if not interface:
+            raise ValueError("interface 不能为空")
+        if mode == "windows":
+            if shutil.which("tshark") is None:
+                raise RuntimeError("未找到 tshark，请安装 Wireshark 并将 tshark 加入 PATH")
+        else:
+            if shutil.which("tcpdump") is None:
+                raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
+
+        interval_sec = max(5, int(interval_sec or 60))
+        bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
+        pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
+
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError("在线监听已在运行")
+            self._stop_event.clear()
+            self._flow_cache.clear()
+            self._next_packet_seq = 0
+            now = _now_text()
+            self._status = CaptureStatus(
+                running=True,
+                interface=interface,
+                interval_sec=interval_sec,
+                idle_timeout_sec=idle_timeout_sec,
+                max_flow_duration_sec=max_flow_duration_sec,
+                pcap_retention_sec=pcap_retention_sec,
+                bpf_filter=bpf_filter,
+                capture_mode=mode,
+                started_at=now,
+                message=(
+                    f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
+                    f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
+                ),
+            )
+            self._thread = threading.Thread(
+                target=self._run_loop,
+                args=(interface, interval_sec, bpf_filter, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec, mode),
+                name="ai-gateway-online-capture",
+                daemon=True,
+            )
+            self._thread.start()
+            return dict(self._status.__dict__)
+
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
         proc = self._proc
@@ -630,7 +707,8 @@ class OnlineCaptureManager:
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
             if shutil.which("tshark"):
-                cmd = ["tshark", "-i", interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
+                resolved_interface = _resolve_windows_interface(interface)
+                cmd = ["tshark", "-i", resolved_interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
                 if bpf_filter:
                     cmd.extend(["-f", bpf_filter])
             else:
@@ -753,35 +831,33 @@ class OnlineCaptureManager:
                 ready.append(flow_key)
         return ready
 
-    def _refresh_cache_status_locked(self) -> None:
+def _refresh_cache_status_locked(self) -> None:
         self._status.cached_flows = len(self._flow_cache)
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
 
-def _detect_capture_backend(preferred_backend: str = "") -> str:
-    preferred = (preferred_backend or "").strip().lower()
-    if preferred in {"linux", "tcpdump"} and shutil.which("tcpdump"):
-        return "tcpdump"
-    if preferred in {"windows", "dumpcap"} and shutil.which("dumpcap"):
-        return "dumpcap"
-    if shutil.which("tcpdump"):
-        return "tcpdump"
-    if shutil.which("dumpcap"):
-        return "dumpcap"
-    return ""
-
-
-def _build_capture_cmd(backend: str, interface: str, interval_sec: int, bpf_filter: str, file_path: Path) -> list[str]:
-    if backend == "dumpcap":
-        cmd = ["dumpcap", "-i", interface, "-a", f"duration:{max(1, int(interval_sec))}", "-w", str(file_path)]
-        if bpf_filter:
-            cmd.extend(["-f", bpf_filter])
-        return cmd
-
-    cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", str(file_path)]
-    if bpf_filter:
-        cmd.extend(shlex.split(bpf_filter))
-    return cmd
+def _resolve_windows_interface(interface: str) -> str:
+    raw = (interface or "").strip()
+    if not raw:
+        return raw
+    if raw.isdigit():
+        return raw
+    try:
+        proc = subprocess.run(["tshark", "-D"], capture_output=True, text=True, timeout=6, check=False)
+    except Exception:
+        return raw
+    output = proc.stdout or ""
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    for line in lines:
+        if ". " not in line:
+            continue
+        idx, rest = line.split(". ", 1)
+        if not idx.isdigit():
+            continue
+        lower = rest.lower()
+        if raw.lower() == rest.lower() or raw.lower() in lower:
+            return idx
+    return raw
 
 
 def _extract_cached_tcp_packets(pcap_path: Path, start_seq: int = 0) -> list[CachedTcpPacket]:
