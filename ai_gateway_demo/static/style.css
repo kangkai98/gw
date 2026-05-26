@@ -111,7 +111,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .chart-panel-compact { min-height: 220px; }
 .query-kpi-panel { min-height: 150px; }
 .filter-item { display: grid; gap: 4px; }
-.filter-item span { font-size: 12px; color: #6f7d95; }
+.filter-item span { font-size: 12px; color: #6f7d95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }
 .inline-config-form { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .8fr) auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
 .inline-config-form-compact { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto; }

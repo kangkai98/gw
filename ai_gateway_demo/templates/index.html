@@ -944,6 +944,19 @@
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
     if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
+    async function startCaptureByBackend(backend) {
+      if (!has('captureForm')) return;
+      const fd = new FormData($('captureForm'));
+      fd.set('capture_backend', backend);
+      try {
+        const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
+        const data = await resp.json();
+        renderCaptureStatus(data);
+        $('status').textContent = data.ok ? `在线监听已启动（${backend}）。` : `在线监听启动失败：${data.message || '未知错误'}`;
+      } catch (err) {
+        $('status').textContent = `在线监听启动失败：${err.message || err}`;
+      }
+    }
     if (has('captureForm')) $('captureForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -961,6 +974,7 @@
         $('status').textContent = `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听启动失败：${err.message || err}`;
       }
     };
+    if (has('startCaptureWindows')) $('startCaptureWindows').onclick = async () => startCaptureByBackend('windows');
     if (has('stopCapture')) $('stopCapture').onclick = async () => {
       const resp = await fetch('/api/capture/stop', { method: 'POST' });
       const data = await resp.json();
