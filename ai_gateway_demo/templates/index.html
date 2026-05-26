@@ -127,15 +127,15 @@
       <section class="glass panel" id="onlineCapturePanel">
         <h2>在线监听</h2>
         <p class="subtle">持续监听网卡流量，按周期读入 pcap，对 FIN/RST、空闲超时或超过最长缓存时长的流回溯识别入库，并自动清理 pcap。</p>
-        <form id="captureForm" class="inline-config-form panel-content-gap capture-form-grid">
-          <label class="filter-item"><span>监听网卡</span><input aria-label="监听网卡" name="interface" value="eth0" placeholder="Linux/macOS: eth0/en0/any；Windows: 使用 dumpcap -D 的接口名或编号（如 1）" required /></label>
-          <label class="filter-item"><span>采集周期(秒)</span><input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="周期秒数" required /></label>
-          <label class="filter-item"><span>流空闲超时(秒)</span><input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="idle timeout 秒" required /></label>
-          <label class="filter-item"><span>单流最长缓存(秒)</span><input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required /></label>
-          <label class="filter-item"><span>PCAP保留时长(秒)</span><input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required /></label>
-          <label class="filter-item"><span>BPF过滤表达式</span><input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" /></label>
-          <button aria-label="开始在线监听" type="submit">开始监听</button>
-          <button aria-label="Windows开始在线监听" type="button" id="startCaptureWindows">Windows开始监听</button>
+        <form id="captureForm" class="inline-config-form panel-content-gap">
+          <input aria-label="监听网卡" name="interface" value="eth0" placeholder="网卡名，如 eth0 / en0 / any" required />
+          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="周期秒数" required />
+          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="idle timeout 秒" required />
+          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required />
+          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required />
+          <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" />
+          <button aria-label="Linux开始在线监听" type="submit" name="capture_mode" value="linux">Linux开始监听</button>
+          <button aria-label="Windows开始在线监听" type="submit" name="capture_mode" value="windows">Windows开始监听</button>
           <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
         </form>
         <div class="subtle" id="captureStatus">未启动在线监听。</div>
@@ -958,13 +958,18 @@
     if (has('captureForm')) $('captureForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const submitter = e.submitter;
+      const captureMode = submitter?.value === 'windows' ? 'windows' : 'linux';
+      const endpoint = captureMode === 'windows' ? '/api/capture/start-windows' : '/api/capture/start';
       try {
-        const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
+        const resp = await fetch(endpoint, { method: 'POST', body: fd });
         const data = await resp.json();
         renderCaptureStatus(data);
-        $('status').textContent = data.ok ? `在线监听已启动（${backend}）。` : `在线监听启动失败：${data.message || '未知错误'}`;
+        $('status').textContent = data.ok
+          ? `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听已启动。`
+          : `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听启动失败：${data.message || '未知错误'}`;
       } catch (err) {
-        $('status').textContent = `在线监听启动失败：${err.message || err}`;
+        $('status').textContent = `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听启动失败：${err.message || err}`;
       }
     };
     if (has('startCaptureWindows')) $('startCaptureWindows').onclick = async () => startCaptureByBackend('windows');
