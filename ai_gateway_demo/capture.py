@@ -831,7 +831,7 @@ class OnlineCaptureManager:
                 ready.append(flow_key)
         return ready
 
-def _refresh_cache_status_locked(self) -> None:
+    def _refresh_cache_status_locked(self) -> None:
         self._status.cached_flows = len(self._flow_cache)
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
@@ -843,7 +843,15 @@ def _resolve_windows_interface(interface: str) -> str:
     if raw.isdigit():
         return raw
     try:
-        proc = subprocess.run(["tshark", "-D"], capture_output=True, text=True, timeout=6, check=False)
+        proc = subprocess.run(
+            ["tshark", "-D"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=6,
+            check=False,
+        )
     except Exception:
         return raw
     output = proc.stdout or ""
