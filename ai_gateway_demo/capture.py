@@ -707,8 +707,7 @@ class OnlineCaptureManager:
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
             if shutil.which("tshark"):
-                resolved_interface = _resolve_windows_interface(interface)
-                cmd = ["tshark", "-i", resolved_interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
+                cmd = ["tshark", "-i", interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
                 if bpf_filter:
                     cmd.extend(["-f", bpf_filter])
             else:
@@ -721,11 +720,17 @@ class OnlineCaptureManager:
         self._proc = proc
         try:
             if mode == "windows":
+                graceful_deadline = time.monotonic() + max(interval_sec + 2, 3)
                 while proc.poll() is None:
-                    if self._stop_event.wait(timeout=0.25):
-                        break
-                if proc.poll() is None:
-                    _terminate_process(proc)
+                    if self._stop_event.is_set():
+                        # On Windows, force-terminating tshark may leave a truncated pcapng/pcap file.
+                        # Prefer waiting for the current duration window to end naturally.
+                        if time.monotonic() >= graceful_deadline:
+                            _terminate_process(proc)
+                            break
+                        time.sleep(0.25)
+                        continue
+                    time.sleep(0.25)
             else:
                 deadline = time.monotonic() + interval_sec
                 while time.monotonic() < deadline:
@@ -831,7 +836,7 @@ class OnlineCaptureManager:
                 ready.append(flow_key)
         return ready
 
-def _refresh_cache_status_locked(self) -> None:
+    def _refresh_cache_status_locked(self) -> None:
         self._status.cached_flows = len(self._flow_cache)
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
@@ -843,7 +848,15 @@ def _resolve_windows_interface(interface: str) -> str:
     if raw.isdigit():
         return raw
     try:
-        proc = subprocess.run(["tshark", "-D"], capture_output=True, text=True, timeout=6, check=False)
+        proc = subprocess.run(
+            ["tshark", "-D"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=6,
+            check=False,
+        )
     except Exception:
         return raw
     output = proc.stdout or ""
