@@ -128,12 +128,30 @@
         <h2>在线监听</h2>
         <p class="subtle">持续监听网卡流量，按周期读入 pcap，对 FIN/RST、空闲超时或超过最长缓存时长的流回溯识别入库，并自动清理 pcap。</p>
         <form id="captureForm" class="inline-config-form panel-content-gap">
-          <input aria-label="监听网卡" name="interface" value="Ethernet" placeholder="网卡名：Ethernet / 以太网 / 1" required />
-          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="采集周期(秒)" required />
-          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="空闲超时(秒)" required />
-          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存(秒,0不限)" required />
-          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留(秒,0删除)" required />
-          <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="过滤表达式：tcp / tcp port 443" class="capture-bpf" />
+          <label>
+            <div class="subtle">监听网卡：填写网卡名或序号（如 Ethernet / 以太网 / 1）。</div>
+            <input aria-label="监听网卡" name="interface" value="Ethernet" placeholder="网卡名：Ethernet / 以太网 / 1" required />
+          </label>
+          <label>
+            <div class="subtle">采集周期：每个窗口持续抓包的秒数（最小 5 秒）。</div>
+            <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="采集周期(秒)" required />
+          </label>
+          <label>
+            <div class="subtle">流空闲超时：连接在该时长无新包后判定为就绪分析。</div>
+            <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="空闲超时(秒)" required />
+          </label>
+          <label>
+            <div class="subtle">单流最长缓存：单条流最多缓存时长（0 表示不限）。</div>
+            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存(秒,0不限)" required />
+          </label>
+          <label>
+            <div class="subtle">pcap保留时长：窗口文件保留秒数（0 表示分析后删除）。</div>
+            <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留(秒,0删除)" required />
+          </label>
+          <label>
+            <div class="subtle">BPF过滤表达式：抓包过滤条件（如 tcp / tcp port 443）。</div>
+            <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="过滤表达式：tcp / tcp port 443" class="capture-bpf" />
+          </label>
           <div class="actions capture-form-actions">
             <button aria-label="Linux开始在线监听" type="submit" name="capture_mode" value="linux">Linux开始监听</button>
             <button aria-label="Windows开始在线监听" type="submit" name="capture_mode" value="windows">Windows开始监听</button>
