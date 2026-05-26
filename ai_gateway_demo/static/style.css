@@ -111,7 +111,7 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .chart-panel-compact { min-height: 220px; }
 .query-kpi-panel { min-height: 150px; }
 .filter-item { display: grid; gap: 4px; }
-.filter-item span { font-size: 12px; color: #6f7d95; }
+.filter-item span { font-size: 12px; color: #6f7d95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 .filter-btn { min-height: 42px; min-width: 96px; font-size: 14px; }
 .inline-config-form { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) minmax(160px, .8fr) auto auto; gap: 10px; align-items: center; margin-bottom: 10px; }
 .inline-config-form-compact { grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto; }
@@ -195,7 +195,10 @@ tr:hover td { background: rgba(255,255,255,.55); }
   .query-kpis-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 #captureStatus { white-space: pre-line; margin-top: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.62); border: 1px solid rgba(86,112,159,.14); }
-#captureForm { grid-template-columns: minmax(150px, .8fr) minmax(100px, .45fr) minmax(180px, 1fr) auto auto; }
+#captureForm.capture-form-grid {
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  align-items: end;
+}
 .grid-two {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

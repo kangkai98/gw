@@ -13,6 +13,24 @@ python -m ai_gateway_demo --port 8000
 python -m ai_gateway_demo --port 8000 --listen-interface eth0 --listen-interval 60 --listen-filter "tcp"
 ```
 
+Windows (PowerShell)：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m ai_gateway_demo --port 8000
+```
+
+Windows (CMD)：
+
+```bat
+python -m venv .venv
+.\.venv\Scripts\activate.bat
+pip install -r requirements.txt
+python -m ai_gateway_demo --port 8000
+```
+
 打开 `http://127.0.0.1:8000`。
 
 ## 网页功能
@@ -31,9 +49,12 @@ python -m ai_gateway_demo --port 8000 --listen-interface eth0 --listen-interval 
 
 ## 在线监听模式
 
-在线模式依赖本机 `tcpdump`，并且运行进程需要具备抓包权限（例如 Linux 下使用 root、`CAP_NET_RAW`/`CAP_NET_ADMIN`，或提前配置 tcpdump 权限）。
+在线模式依赖本机抓包工具并且运行进程需要具备抓包权限：
 
-- 页面启动后进入“配置”页，在“在线监听”中填写网卡名（如 `eth0`、`en0`、`any`）、分析周期（默认 `60` 秒）和 BPF 过滤表达式（默认 `tcp`），点击“开始监听”。
+- Linux/macOS：`tcpdump`
+- Windows：建议安装 Npcap，并确保 `dumpcap`（或 `tcpdump`）在 PATH 中
+
+- 页面启动后进入“配置”页，在“在线监听”中填写网卡名（如 Linux/macOS 的 `eth0`/`en0`/`any`，或 Windows 中 dumpcap 可识别的网卡）、分析周期（默认 `60` 秒）和 BPF 过滤表达式（默认 `tcp`），点击“开始监听”。
 - 服务端会每个周期生成一个 `captures/online_YYYYMMDD_HHMMSS.pcap` 文件，周期结束后立即复用现有解析逻辑入库，页面每 10 秒刷新一次监听状态与最新结果。
 - 也可以通过命令行自动启动：`python -m ai_gateway_demo --listen-interface eth0 --listen-interval 60 --listen-filter "tcp port 443"`。
 - “停止监听”会结束当前 tcpdump 进程，并保留已经生成的窗口文件。
