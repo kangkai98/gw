@@ -134,7 +134,8 @@
           <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存秒，0不限" required />
           <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留秒，0删除" required />
           <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="BPF过滤，如 tcp port 443" />
-          <button aria-label="开始在线监听" type="submit">开始监听</button>
+          <button aria-label="Linux开始在线监听" type="submit" name="capture_mode" value="linux">Linux开始监听</button>
+          <button aria-label="Windows开始在线监听" type="submit" name="capture_mode" value="windows">Windows开始监听</button>
           <button aria-label="停止在线监听" id="stopCapture" type="button" class="warn">停止监听</button>
         </form>
         <div class="subtle" id="captureStatus">未启动在线监听。</div>
@@ -944,13 +945,18 @@
     if (has('captureForm')) $('captureForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
+      const submitter = e.submitter;
+      const captureMode = submitter?.value === 'windows' ? 'windows' : 'linux';
+      const endpoint = captureMode === 'windows' ? '/api/capture/start-windows' : '/api/capture/start';
       try {
-        const resp = await fetch('/api/capture/start', { method: 'POST', body: fd });
+        const resp = await fetch(endpoint, { method: 'POST', body: fd });
         const data = await resp.json();
         renderCaptureStatus(data);
-        $('status').textContent = data.ok ? '在线监听已启动。' : `在线监听启动失败：${data.message || '未知错误'}`;
+        $('status').textContent = data.ok
+          ? `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听已启动。`
+          : `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听启动失败：${data.message || '未知错误'}`;
       } catch (err) {
-        $('status').textContent = `在线监听启动失败：${err.message || err}`;
+        $('status').textContent = `${captureMode === 'windows' ? 'Windows' : 'Linux'}在线监听启动失败：${err.message || err}`;
       }
     };
     if (has('stopCapture')) $('stopCapture').onclick = async () => {
