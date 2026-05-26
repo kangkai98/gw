@@ -843,7 +843,15 @@ def _resolve_windows_interface(interface: str) -> str:
     if raw.isdigit():
         return raw
     try:
-        proc = subprocess.run(["tshark", "-D"], capture_output=True, text=True, timeout=6, check=False)
+        proc = subprocess.run(
+            ["tshark", "-D"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=6,
+            check=False,
+        )
     except Exception:
         return raw
     output = proc.stdout or ""
