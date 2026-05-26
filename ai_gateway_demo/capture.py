@@ -39,7 +39,7 @@ class CaptureStatus:
     max_flow_duration_sec: int = 300
     pcap_retention_sec: int = 0
     bpf_filter: str = "tcp"
-    capture_backend: str = ""
+    capture_mode: str = "linux"
     started_at: str | None = None
     current_file: str | None = None
     last_window_started_at: str | None = None
@@ -312,9 +312,10 @@ class OnlineCaptureManager:
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
                 bpf_filter=bpf_filter,
+                capture_mode=mode,
                 started_at=now,
                 message=(
-                    f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
+                    f"在线监听已启动（{mode}）：{interface}，每 {interval_sec} 秒采集一次，"
                     f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
                 ),
             )
@@ -387,6 +388,82 @@ class OnlineCaptureManager:
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
                 bpf_filter=bpf_filter,
+                started_at=now,
+                message=(
+                    f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
+                    f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
+                ),
+            )
+            self._thread = threading.Thread(
+                target=self._run_loop,
+                args=(interface, interval_sec, bpf_filter, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec, mode),
+                name="ai-gateway-online-capture",
+                daemon=True,
+            )
+            self._thread.start()
+            return dict(self._status.__dict__)
+
+    def start_windows(
+        self,
+        interface: str,
+        interval_sec: int = 60,
+        bpf_filter: str = "tcp",
+        idle_timeout_sec: int = 120,
+        max_flow_duration_sec: int = 300,
+        pcap_retention_sec: int = 0,
+    ) -> dict[str, Any]:
+        return self._start_with_mode(
+            interface=interface,
+            interval_sec=interval_sec,
+            bpf_filter=bpf_filter,
+            idle_timeout_sec=idle_timeout_sec,
+            max_flow_duration_sec=max_flow_duration_sec,
+            pcap_retention_sec=pcap_retention_sec,
+            mode="windows",
+        )
+
+    def _start_with_mode(
+        self,
+        interface: str,
+        interval_sec: int,
+        bpf_filter: str,
+        idle_timeout_sec: int,
+        max_flow_duration_sec: int,
+        pcap_retention_sec: int,
+        mode: str,
+    ) -> dict[str, Any]:
+        interface = (interface or "").strip()
+        if not interface:
+            raise ValueError("interface 不能为空")
+        if mode == "windows":
+            if shutil.which("tshark") is None:
+                raise RuntimeError("未找到 tshark，请安装 Wireshark 并将 tshark 加入 PATH")
+        else:
+            if shutil.which("tcpdump") is None:
+                raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
+
+        interval_sec = max(5, int(interval_sec or 60))
+        bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
+        pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
+
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError("在线监听已在运行")
+            self._stop_event.clear()
+            self._flow_cache.clear()
+            self._next_packet_seq = 0
+            now = _now_text()
+            self._status = CaptureStatus(
+                running=True,
+                interface=interface,
+                interval_sec=interval_sec,
+                idle_timeout_sec=idle_timeout_sec,
+                max_flow_duration_sec=max_flow_duration_sec,
+                pcap_retention_sec=pcap_retention_sec,
+                bpf_filter=bpf_filter,
+                capture_mode=mode,
                 started_at=now,
                 message=(
                     f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
@@ -476,16 +553,12 @@ class OnlineCaptureManager:
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
-            if shutil.which("dumpcap"):
-                cmd = ["dumpcap", "-i", interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
-                if bpf_filter:
-                    cmd.extend(["-f", bpf_filter])
-            elif shutil.which("tshark"):
+            if shutil.which("tshark"):
                 cmd = ["tshark", "-i", interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
                 if bpf_filter:
                     cmd.extend(["-f", bpf_filter])
             else:
-                raise RuntimeError("未找到 dumpcap/tshark，请安装 Wireshark（含命令行工具）")
+                raise RuntimeError("未找到 tshark，请安装 Wireshark 并将 tshark 加入 PATH")
         else:
             cmd = ["tcpdump", "-i", interface, "-s", "0", "-U", "-w", str(file_path)]
             if bpf_filter:
@@ -511,7 +584,7 @@ class OnlineCaptureManager:
             _, stderr = proc.communicate(timeout=5)
             if proc.returncode not in (0, -15, -2, 143, 130, 1):
                 err = stderr.decode("utf-8", errors="ignore").strip()
-                tool_name = "dumpcap/tshark" if mode == "windows" else "tcpdump"
+                tool_name = "tshark" if mode == "windows" else "tcpdump"
                 raise RuntimeError(err or f"{tool_name} 退出码 {proc.returncode}")
         finally:
             self._proc = None
