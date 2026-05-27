@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 import platform
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -656,6 +656,52 @@ class OnlineCaptureManager:
         pcap_retention_sec: int,
         mode: str = "linux",
     ) -> None:
+        pending_files: deque[Path] = deque()
+        pending_lock = threading.Lock()
+        pending_event = threading.Event()
+        def _analyze_worker() -> None:
+            while True:
+                pending_event.wait(timeout=0.5)
+                file_path: Path | None = None
+                with pending_lock:
+                    if pending_files:
+                        file_path = pending_files.popleft()
+                    else:
+                        pending_event.clear()
+                if file_path is None:
+                    if self._stop_event.is_set():
+                        break
+                    continue
+                try:
+                    detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
+                        file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
+                    )
+                    finished = _now_text()
+                    with self._lock:
+                        self._status.last_window_finished_at = finished
+                        self._status.last_pcap = str(file_path)
+                        self._status.last_detected = detected
+                        self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
+                        self._status.last_ready_flows = ready_flows
+                        self._status.last_inserted = inserted
+                        self._status.last_deleted_pcaps = deleted_pcaps
+                        self._status.total_deleted_pcaps += deleted_pcaps
+                        self._status.total_windows += 1
+                        self._status.total_detected += detected
+                        self._status.total_inserted += inserted
+                        self._refresh_cache_status_locked()
+                        self._status.message = (
+                            f"窗口分析完成：就绪流 {ready_flows} 个，检测 {detected} 条，"
+                            f"入库 {inserted} 条，清理 pcap {deleted_pcaps} 个"
+                        )
+                except Exception as exc:  # pragma: no cover
+                    with self._lock:
+                        self._status.last_error = str(exc)
+                        self._status.message = f"在线监听分析异常：{exc}"
+
+        analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
+        analyzer.start()
+
         while not self._stop_event.is_set():
             window_started = datetime.now()
             file_path = self.output_dir / f"online_{window_started.strftime('%Y%m%d_%H%M%S')}.pcap"
@@ -669,27 +715,9 @@ class OnlineCaptureManager:
                 self._capture_one_window(interface, interval_sec, bpf_filter, file_path, mode=mode)
                 if self._stop_event.is_set() and (not file_path.exists() or file_path.stat().st_size == 0):
                     break
-                detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
-                    file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
-                )
-                finished = _now_text()
-                with self._lock:
-                    self._status.last_window_finished_at = finished
-                    self._status.last_pcap = str(file_path)
-                    self._status.last_detected = detected
-                    self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
-                    self._status.last_ready_flows = ready_flows
-                    self._status.last_inserted = inserted
-                    self._status.last_deleted_pcaps = deleted_pcaps
-                    self._status.total_deleted_pcaps += deleted_pcaps
-                    self._status.total_windows += 1
-                    self._status.total_detected += detected
-                    self._status.total_inserted += inserted
-                    self._refresh_cache_status_locked()
-                    self._status.message = (
-                        f"窗口分析完成：就绪流 {ready_flows} 个，检测 {detected} 条，"
-                        f"入库 {inserted} 条，清理 pcap {deleted_pcaps} 个"
-                    )
+                with pending_lock:
+                    pending_files.append(file_path)
+                    pending_event.set()
             except Exception as exc:  # pragma: no cover - depends on local capture privileges/tooling
                 with self._lock:
                     self._status.last_error = str(exc)
@@ -697,6 +725,9 @@ class OnlineCaptureManager:
                 # Avoid a tight retry loop when tcpdump fails immediately (e.g. no permission/interface not found).
                 if self._stop_event.wait(timeout=5):
                     break
+        self._stop_event.set()
+        pending_event.set()
+        analyzer.join(timeout=10)
 
         with self._lock:
             self._status.running = False
@@ -707,8 +738,7 @@ class OnlineCaptureManager:
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
             if shutil.which("tshark"):
-                resolved_interface = _resolve_windows_interface(interface)
-                cmd = ["tshark", "-i", resolved_interface, "-a", f"duration:{interval_sec}", "-w", str(file_path)]
+                cmd = ["tshark", "-i", interface, "-a", f"duration:{interval_sec}", "-F", "pcap", "-w", str(file_path)]
                 if bpf_filter:
                     cmd.extend(["-f", bpf_filter])
             else:
@@ -721,11 +751,17 @@ class OnlineCaptureManager:
         self._proc = proc
         try:
             if mode == "windows":
+                graceful_deadline = time.monotonic() + max(interval_sec + 2, 3)
                 while proc.poll() is None:
-                    if self._stop_event.wait(timeout=0.25):
-                        break
-                if proc.poll() is None:
-                    _terminate_process(proc)
+                    if self._stop_event.is_set():
+                        # On Windows, force-terminating tshark may leave a truncated pcapng/pcap file.
+                        # Prefer waiting for the current duration window to end naturally.
+                        if time.monotonic() >= graceful_deadline:
+                            _terminate_process(proc)
+                            break
+                        time.sleep(0.25)
+                        continue
+                    time.sleep(0.25)
             else:
                 deadline = time.monotonic() + interval_sec
                 while time.monotonic() < deadline:
@@ -831,7 +867,7 @@ class OnlineCaptureManager:
                 ready.append(flow_key)
         return ready
 
-def _refresh_cache_status_locked(self) -> None:
+    def _refresh_cache_status_locked(self) -> None:
         self._status.cached_flows = len(self._flow_cache)
         self._status.cached_packets = sum(len(packets) for packets in self._flow_cache.values())
 
@@ -843,7 +879,15 @@ def _resolve_windows_interface(interface: str) -> str:
     if raw.isdigit():
         return raw
     try:
-        proc = subprocess.run(["tshark", "-D"], capture_output=True, text=True, timeout=6, check=False)
+        proc = subprocess.run(
+            ["tshark", "-D"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=6,
+            check=False,
+        )
     except Exception:
         return raw
     output = proc.stdout or ""
