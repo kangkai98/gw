@@ -72,6 +72,7 @@ class OnlineCaptureManager:
     _flow_cache: dict[str, list[CachedTcpPacket]] = field(default_factory=dict, init=False)
     _next_packet_seq: int = field(default=0, init=False)
     _capture_backend: str = field(default="", init=False)
+    _run_started_at: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -228,6 +229,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._next_packet_seq = 0
+            self._run_started_at = time.time()
             now = _now_text()
             self._status = CaptureStatus(
                 running=True,
@@ -719,6 +721,11 @@ class OnlineCaptureManager:
         candidates = files if finalize else files[:-1]
         for file_path in candidates:
             if file_path in processed_files or not file_path.exists():
+                continue
+            try:
+                if file_path.stat().st_mtime + 1e-6 < self._run_started_at:
+                    continue
+            except OSError:
                 continue
             detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
                 file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
