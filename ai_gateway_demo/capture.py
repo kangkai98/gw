@@ -6,7 +6,7 @@ import subprocess
 import threading
 import time
 import platform
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -657,6 +657,52 @@ class OnlineCaptureManager:
         pcap_retention_sec: int,
         mode: str = "linux",
     ) -> None:
+        pending_files: deque[Path] = deque()
+        pending_lock = threading.Lock()
+        pending_event = threading.Event()
+        def _analyze_worker() -> None:
+            while True:
+                pending_event.wait(timeout=0.5)
+                file_path: Path | None = None
+                with pending_lock:
+                    if pending_files:
+                        file_path = pending_files.popleft()
+                    else:
+                        pending_event.clear()
+                if file_path is None:
+                    if self._stop_event.is_set():
+                        break
+                    continue
+                try:
+                    detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
+                        file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
+                    )
+                    finished = _now_text()
+                    with self._lock:
+                        self._status.last_window_finished_at = finished
+                        self._status.last_pcap = str(file_path)
+                        self._status.last_detected = detected
+                        self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
+                        self._status.last_ready_flows = ready_flows
+                        self._status.last_inserted = inserted
+                        self._status.last_deleted_pcaps = deleted_pcaps
+                        self._status.total_deleted_pcaps += deleted_pcaps
+                        self._status.total_windows += 1
+                        self._status.total_detected += detected
+                        self._status.total_inserted += inserted
+                        self._refresh_cache_status_locked()
+                        self._status.message = (
+                            f"窗口分析完成：就绪流 {ready_flows} 个，检测 {detected} 条，"
+                            f"入库 {inserted} 条，清理 pcap {deleted_pcaps} 个"
+                        )
+                except Exception as exc:  # pragma: no cover
+                    with self._lock:
+                        self._status.last_error = str(exc)
+                        self._status.message = f"在线监听分析异常：{exc}"
+
+        analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
+        analyzer.start()
+
         while not self._stop_event.is_set():
             window_started = datetime.now()
             file_path = self.output_dir / f"online_{window_started.strftime('%Y%m%d_%H%M%S')}.pcap"
@@ -670,27 +716,9 @@ class OnlineCaptureManager:
                 self._capture_one_window(interface, interval_sec, bpf_filter, file_path, mode=mode)
                 if self._stop_event.is_set() and (not file_path.exists() or file_path.stat().st_size == 0):
                     break
-                detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
-                    file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
-                )
-                finished = _now_text()
-                with self._lock:
-                    self._status.last_window_finished_at = finished
-                    self._status.last_pcap = str(file_path)
-                    self._status.last_detected = detected
-                    self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
-                    self._status.last_ready_flows = ready_flows
-                    self._status.last_inserted = inserted
-                    self._status.last_deleted_pcaps = deleted_pcaps
-                    self._status.total_deleted_pcaps += deleted_pcaps
-                    self._status.total_windows += 1
-                    self._status.total_detected += detected
-                    self._status.total_inserted += inserted
-                    self._refresh_cache_status_locked()
-                    self._status.message = (
-                        f"窗口分析完成：就绪流 {ready_flows} 个，检测 {detected} 条，"
-                        f"入库 {inserted} 条，清理 pcap {deleted_pcaps} 个"
-                    )
+                with pending_lock:
+                    pending_files.append(file_path)
+                    pending_event.set()
             except Exception as exc:  # pragma: no cover - depends on local capture privileges/tooling
                 with self._lock:
                     self._status.last_error = str(exc)
@@ -698,6 +726,9 @@ class OnlineCaptureManager:
                 # Avoid a tight retry loop when tcpdump fails immediately (e.g. no permission/interface not found).
                 if self._stop_event.wait(timeout=5):
                     break
+        self._stop_event.set()
+        pending_event.set()
+        analyzer.join(timeout=10)
 
         with self._lock:
             self._status.running = False
