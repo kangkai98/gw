@@ -698,14 +698,14 @@ class OnlineCaptureManager:
             if shutil.which("tshark") is None:
                 raise RuntimeError("未找到 tshark，请安装 Wireshark 并将 tshark 加入 PATH")
             base_file = self.output_dir / "online.pcap"
-            cmd = ["tshark", "-i", interface, "-F", "pcap", "-b", f"duration:{interval_sec}", "-b", "files:0", "-w", str(base_file)]
+            cmd = ["tshark", "-i", interface, "-F", "pcap", "-b", f"duration:{interval_sec}", "-w", str(base_file)]
             if bpf_filter:
                 cmd.extend(["-f", bpf_filter])
         else:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
             pattern = self.output_dir / "online_%Y%m%d_%H%M%S.pcap"
-            cmd = ["tcpdump", "-i", interface, "-s", "0", "-G", str(interval_sec), "-W", "0", "-w", str(pattern)]
+            cmd = ["tcpdump", "-i", interface, "-s", "0", "-G", str(interval_sec), "-w", str(pattern)]
             if bpf_filter:
                 cmd.extend(shlex.split(bpf_filter))
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
