@@ -14,8 +14,8 @@ from typing import Any, Callable
 
 from scapy.all import IP, TCP, PcapReader, wrpcap
 
-from .db import insert_entry, list_self_hosted
-from .parser import parse_pcap_to_entries
+from .db import insert_entry, insert_traffic_summary, list_self_hosted
+from .parser import parse_pcap_to_entries, summarize_pcap_traffic
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
@@ -727,6 +727,9 @@ class OnlineCaptureManager:
                     continue
             except OSError:
                 continue
+            configs = list_self_hosted()
+            traffic_summary = summarize_pcap_traffic(file_path, self_hosted_configs=configs)
+            insert_traffic_summary({**traffic_summary, "source": "online"})
             detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
                 file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
             )
