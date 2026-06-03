@@ -830,6 +830,52 @@ def _infer_entry_flow_key(
     return f"{client_ip}:?-{server_ip}:?"
 
 
+
+def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | None = None) -> dict[str, int | str | None]:
+    packets = extract_packets(pcap_path)
+    if not packets:
+        return {
+            "pcap_path": str(pcap_path),
+            "window_start_time": None,
+            "window_end_time": None,
+            "uplink_total_bytes": 0,
+            "downlink_total_bytes": 0,
+            "uplink_ai_bytes": 0,
+            "downlink_ai_bytes": 0,
+        }
+
+    flows = group_bi_flows(packets)
+    ai_flow_keys = {flow_key for flow_key, _, _ in _pick_flows(flows)}
+    totals = {
+        "uplink_total_bytes": 0,
+        "downlink_total_bytes": 0,
+        "uplink_ai_bytes": 0,
+        "downlink_ai_bytes": 0,
+    }
+
+    for flow_key, flow_packets in flows.items():
+        go_tuple = _wsw_find_go_tuple(sorted(flow_packets, key=lambda p: p.ts))
+        client_ip, server_ip = infer_direction(flow_packets, go_tuple=go_tuple)
+        is_ai_flow = flow_key in ai_flow_keys
+        for packet in flow_packets:
+            packet_bytes = int(packet.wire_len or 0)
+            if packet.src == client_ip and packet.dst == server_ip:
+                totals["uplink_total_bytes"] += packet_bytes
+                if is_ai_flow:
+                    totals["uplink_ai_bytes"] += packet_bytes
+            elif packet.src == server_ip and packet.dst == client_ip:
+                totals["downlink_total_bytes"] += packet_bytes
+                if is_ai_flow:
+                    totals["downlink_ai_bytes"] += packet_bytes
+
+    return {
+        "pcap_path": str(pcap_path),
+        "window_start_time": fmt_real_time(min(packet.ts for packet in packets)),
+        "window_end_time": fmt_real_time(max(packet.ts for packet in packets)),
+        **totals,
+    }
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
     packets = extract_packets(pcap_path)
     if not packets:
