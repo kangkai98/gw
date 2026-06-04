@@ -240,6 +240,8 @@ async def api_upload(file: UploadFile = File(...)):
     traffic_summary = summarize_pcap_traffic(local_file, self_hosted_configs=configs)
     insert_traffic_summary({**traffic_summary, "source": "upload"})
     entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
+    traffic_summary = summarize_pcap_traffic(local_file, self_hosted_configs=configs)
+    insert_traffic_summary({**traffic_summary, "source": "upload"})
     inserted = 0
     for e in entries:
         if insert_entry(e):

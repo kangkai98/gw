@@ -727,9 +727,6 @@ class OnlineCaptureManager:
                     continue
             except OSError:
                 continue
-            configs = list_self_hosted()
-            traffic_summary = summarize_pcap_traffic(file_path, self_hosted_configs=configs)
-            insert_traffic_summary({**traffic_summary, "source": "online"})
             detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
                 file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
             )
@@ -844,6 +841,8 @@ class OnlineCaptureManager:
 
         configs = list_self_hosted()
         entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
+        traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
+        insert_traffic_summary({**traffic_summary, "source": "online"})
         inserted = 0
         for entry in entries:
             if not insert_entry(entry):
