@@ -15,7 +15,7 @@ from typing import Any, Callable
 from scapy.all import IP, TCP, PcapReader, wrpcap
 
 from .db import insert_entry, insert_traffic_summary, list_self_hosted
-from .parser import parse_pcap_to_entries, summarize_pcap_traffic
+from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
@@ -840,9 +840,10 @@ class OnlineCaptureManager:
         _write_cached_packets_to_pcap(analyzed_pcap, ready_packets)
 
         configs = list_self_hosted()
-        entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
-        traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
-        insert_traffic_summary({**traffic_summary, "source": "online"})
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
+            insert_traffic_summary({**traffic_summary, "source": "online"})
         inserted = 0
         for entry in entries:
             if not insert_entry(entry):

@@ -419,6 +419,7 @@
     const num3 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(3));
     const num6 = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Number(v).toFixed(6));
     const compact = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '-' : Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(v)));
+    let uploadBusy = false;
     const bytes = (v) => {
       const n = Number(v || 0);
       if (!Number.isFinite(n)) return '-';
@@ -977,7 +978,25 @@
     }
 
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
-    if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
+    if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      if (uploadBusy) return;
+      uploadBusy = true;
+      const submitBtn = e.target.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+      const fd = new FormData(e.target);
+      try {
+        const data = await uploadWithProgress(fd);
+        $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`;
+        await refreshAll();
+      } catch (err) {
+        $('status').textContent = `上传失败：${err.message || err}`;
+      } finally {
+        uploadBusy = false;
+        if (submitBtn) submitBtn.disabled = false;
+        setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800);
+      }
+    };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
     async function startCaptureByBackend(backend) {
       if (!has('captureForm')) return;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -838,6 +839,7 @@ totals: dict[str, int] = {
     "uplink_ai_bytes": 0,
     "downlink_ai_bytes": 0,
 }
+traffic_totals_lock = threading.Lock()
 
 
 def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | None = None) -> dict[str, int | str | None]:
