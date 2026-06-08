@@ -653,11 +653,12 @@ class OnlineCaptureManager:
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
         proc = self._proc
-        if proc and proc.poll() is None:
+        capture_mode = self._status.capture_mode
+        if proc and proc.poll() is None and capture_mode != "windows":
             _terminate_process(proc)
         thread = self._thread
         if thread and thread.is_alive():
-            thread.join(timeout=5)
+            thread.join(timeout=8 if capture_mode == "windows" else 5)
         with self._lock:
             self._status.running = False
             self._status.message = "在线监听已停止"
