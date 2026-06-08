@@ -54,8 +54,13 @@ class CaptureStatus:
     last_detected: int = 0
     last_inserted: int = 0
     pending_online_windows: int = 0
+    pending_online_files: int = 0
     total_capture_windows: int = 0
+    total_online_files: int = 0
     total_windows: int = 0
+    analyzed_online_files: int = 0
+    total_ready_files: int = 0
+    analyzed_ready_files: int = 0
     last_analysis_file: str | None = None
     last_analysis_file_size_bytes: int = 0
     last_analysis_duration_sec: float | None = None
@@ -78,6 +83,7 @@ class OnlineCaptureManager:
     _next_packet_seq: int = field(default=0, init=False)
     _capture_backend: str = field(default="", init=False)
     _run_started_at: float = field(default=0.0, init=False)
+    _last_analyzed_pcap_size_bytes: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -687,7 +693,9 @@ class OnlineCaptureManager:
                     queued_files.add(file_path)
                     with self._lock:
                         self._status.total_capture_windows += 1
+                        self._status.total_online_files = self._status.total_capture_windows
                         self._status.pending_online_windows = len(queued_files)
+                        self._status.pending_online_files = len(queued_files)
                 if pending_files:
                     pending_event.set()
 
@@ -716,6 +724,7 @@ class OnlineCaptureManager:
                         processed_files.add(file_path)
                         with self._lock:
                             self._status.pending_online_windows = len(queued_files)
+                            self._status.pending_online_files = len(queued_files)
 
         analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
         analyzer.start()
@@ -734,11 +743,13 @@ class OnlineCaptureManager:
                 with self._lock:
                     pending_count = len(queued_files)
                     self._status.pending_online_windows = pending_count
+                    self._status.pending_online_files = pending_count
                     self._status.current_file = "rolling"
                     self._status.message = (
-                        f"正在采集窗口：每 {interval_sec} 秒滚动写文件，"
-                        f"已采集 {self._status.total_capture_windows} 个，"
-                        f"已分析 {self._status.total_windows} 个，待分析 online {pending_count} 个"
+                        f"正在采集：每 {interval_sec} 秒生成 online 文件，"
+                        f"online 已生成 {self._status.total_online_files} 个，"
+                        f"已分析 {self._status.analyzed_online_files} 个，待分析 {pending_count} 个；"
+                        f"ready 已生成 {self._status.total_ready_files} 个，已分析 {self._status.analyzed_ready_files} 个"
                     )
                 if self._stop_event.wait(timeout=1):
                     break
@@ -792,6 +803,8 @@ class OnlineCaptureManager:
             analysis_file_size = analysis_file.stat().st_size if analysis_file and analysis_file.exists() else 0
         except OSError:
             analysis_file_size = 0
+        if analysis_file_size == 0 and analyzed_pcap:
+            analysis_file_size = self._last_analyzed_pcap_size_bytes
         finished = _now_text()
         with self._lock:
             self._status.last_window_finished_at = finished
@@ -806,6 +819,7 @@ class OnlineCaptureManager:
             self._status.last_deleted_pcaps = deleted_pcaps
             self._status.total_deleted_pcaps += deleted_pcaps
             self._status.total_windows += 1
+            self._status.analyzed_online_files = self._status.total_windows
             self._status.total_detected += detected
             self._status.total_inserted += inserted
             self._refresh_cache_status_locked()
@@ -893,21 +907,23 @@ class OnlineCaptureManager:
 
         observation_ts = max((p.ts for p in packets), default=time.time())
         ready_keys = self._ready_flow_keys(observation_ts, idle_timeout_sec, max_flow_duration_sec)
-        if not ready_keys:
-            with self._lock:
-                self._refresh_cache_status_locked()
-            deleted_pcaps += _cleanup_expired_pcaps(self.output_dir, pcap_retention_sec)
-            return 0, 0, 0, None, deleted_pcaps
-
         ready_packets = [pkt for key in ready_keys for pkt in self._flow_cache.get(key, [])]
-        analyzed_pcap = self.output_dir / f"ready_{datetime.fromtimestamp(observation_ts).strftime('%Y%m%d_%H%M%S')}.pcap"
+        analyzed_pcap = _ready_pcap_path(self.output_dir, observation_ts, file_path)
         _write_cached_packets_to_pcap(analyzed_pcap, ready_packets)
+        try:
+            self._last_analyzed_pcap_size_bytes = analyzed_pcap.stat().st_size
+        except OSError:
+            self._last_analyzed_pcap_size_bytes = 0
+        with self._lock:
+            self._status.total_ready_files += 1
 
         configs = list_self_hosted()
         with traffic_totals_lock:
             entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
             traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
             insert_traffic_summary({**traffic_summary, "source": "online"})
+        with self._lock:
+            self._status.analyzed_ready_files += 1
         inserted = 0
         for entry in entries:
             if not insert_entry(entry):
@@ -923,7 +939,11 @@ class OnlineCaptureManager:
             self._flow_cache.pop(key, None)
         if pcap_retention_sec == 0 and _delete_file(analyzed_pcap):
             deleted_pcaps += 1
-        deleted_pcaps += _cleanup_expired_pcaps(self.output_dir, pcap_retention_sec)
+        deleted_pcaps += _cleanup_expired_pcaps(
+            self.output_dir,
+            pcap_retention_sec,
+            keep_latest_online=self._proc is not None and self._proc.poll() is None,
+        )
         with self._lock:
             self._refresh_cache_status_locked()
         return len(entries), inserted, len(ready_keys), analyzed_pcap, deleted_pcaps
@@ -1028,13 +1048,30 @@ def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket
     wrpcap(str(pcap_path), scapy_packets)
 
 
-def _cleanup_expired_pcaps(output_dir: Path, retention_sec: int) -> int:
+def _ready_pcap_path(output_dir: Path, observation_ts: float, source_path: Path) -> Path:
+    timestamp = datetime.fromtimestamp(observation_ts).strftime("%Y%m%d_%H%M%S")
+    source_stem = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in source_path.stem)
+    base = output_dir / f"ready_{timestamp}_{source_stem}.pcap"
+    if not base.exists():
+        return base
+    suffix = 1
+    while True:
+        candidate = output_dir / f"ready_{timestamp}_{source_stem}_{suffix}.pcap"
+        if not candidate.exists():
+            return candidate
+        suffix += 1
+
+
+def _cleanup_expired_pcaps(output_dir: Path, retention_sec: int, keep_latest_online: bool = False) -> int:
     if retention_sec <= 0:
         return 0
     cutoff = time.time() - retention_sec
     deleted = 0
-    for pattern in ("ready_*.pcap",):
-        for path in output_dir.glob(pattern):
+    for pattern in ("online*.pcap", "ready_*.pcap"):
+        paths = sorted(output_dir.glob(pattern), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+        if pattern == "online*.pcap" and keep_latest_online and paths:
+            paths = paths[:-1]
+        for path in paths:
             try:
                 if path.stat().st_mtime <= cutoff and _delete_file(path):
                     deleted += 1

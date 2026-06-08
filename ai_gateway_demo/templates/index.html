@@ -896,10 +896,11 @@
         `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；idle：${capture?.idle_timeout_sec || 120}s；最长缓存：${capture?.max_flow_duration_sec ?? 300}s；过滤：${capture?.bpf_filter || 'tcp'}`,
         `pcap保留：${capture?.pcap_retention_sec ?? 0}s；最近清理：${capture?.last_deleted_pcaps ?? 0} 个；累计清理：${capture?.total_deleted_pcaps ?? 0} 个`,
         `缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包；就绪流：${capture?.last_ready_flows ?? 0}`,
-        `最近窗口：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
-        `采集窗口：已采集 ${capture?.total_capture_windows ?? 0} 个 / 已分析 ${capture?.total_windows ?? 0} 个 / 待分析 online ${capture?.pending_online_windows ?? 0} 个`,
-        `上次分析：${capture?.last_analysis_file || '-'}；大小 ${bytes(capture?.last_analysis_file_size_bytes ?? 0)}；耗时 ${num2(capture?.last_analysis_duration_sec)}s`,
-        `累计：${capture?.total_windows ?? 0} 个已分析窗口 / ${capture?.total_inserted ?? 0} 条入库`,
+        `最近分析：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
+        `online文件：已采集 ${capture?.total_online_files ?? capture?.total_capture_windows ?? 0} 个 / 已分析 ${capture?.analyzed_online_files ?? capture?.total_windows ?? 0} 个 / 待分析 ${capture?.pending_online_files ?? capture?.pending_online_windows ?? 0} 个`,
+        `ready文件：已生成 ${capture?.total_ready_files ?? 0} 个 / 已分析 ${capture?.analyzed_ready_files ?? 0} 个`,
+        `上次分析文件：${capture?.last_analysis_file || '-'}；大小 ${bytes(capture?.last_analysis_file_size_bytes ?? 0)}；耗时 ${num2(capture?.last_analysis_duration_sec)}s`,
+        `累计：${capture?.total_inserted ?? 0} 条入库`,
       ];
       if (capture?.last_error) lines.push(`错误：${capture.last_error}`);
       $('captureStatus').textContent = lines.join('\n');
