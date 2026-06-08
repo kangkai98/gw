@@ -660,13 +660,60 @@ class OnlineCaptureManager:
         mode: str = "linux",
     ) -> None:
         processed_files: set[Path] = set()
+        queued_files: set[Path] = set()
+        pending_files: deque[Path] = deque()
+        pending_lock = threading.Lock()
+        pending_event = threading.Event()
+        analyzer_done = threading.Event()
+
+        def _enqueue_rotated_files(finalize: bool) -> None:
+            files = sorted(self.output_dir.glob("online*.pcap"), key=lambda p: p.name)
+            candidates = files if finalize else files[:-1]
+            with pending_lock:
+                for file_path in candidates:
+                    if file_path in processed_files or file_path in queued_files or not file_path.exists():
+                        continue
+                    try:
+                        if file_path.stat().st_mtime + 1e-6 < self._run_started_at:
+                            continue
+                    except OSError:
+                        continue
+                    pending_files.append(file_path)
+                    queued_files.add(file_path)
+                if pending_files:
+                    pending_event.set()
+
+        def _analyze_worker() -> None:
+            while True:
+                pending_event.wait(timeout=0.5)
+                file_path: Path | None = None
+                with pending_lock:
+                    if pending_files:
+                        file_path = pending_files.popleft()
+                    else:
+                        pending_event.clear()
+                if file_path is None:
+                    if analyzer_done.is_set():
+                        break
+                    continue
+                try:
+                    self._process_rotated_file(file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec)
+                except Exception as exc:  # pragma: no cover - depends on local pcap/parser state
+                    with self._lock:
+                        self._status.last_error = str(exc)
+                        self._status.message = f"在线监听分析异常：{exc}"
+                finally:
+                    with pending_lock:
+                        queued_files.discard(file_path)
+                        processed_files.add(file_path)
+
+        analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
+        analyzer.start()
         proc = self._start_continuous_capture(interface, interval_sec, bpf_filter, mode=mode)
         self._proc = proc
         try:
             while not self._stop_event.is_set():
-                self._drain_rotated_files(
-                    processed_files, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec, finalize=False
-                )
+                _enqueue_rotated_files(finalize=False)
                 if proc.poll() is not None:
                     _, stderr = proc.communicate(timeout=5)
                     if proc.returncode not in (0, -15, -2, 143, 130, 1):
@@ -675,8 +722,9 @@ class OnlineCaptureManager:
                         raise RuntimeError(err or f"{tool_name} 退出码 {proc.returncode}")
                     break
                 with self._lock:
+                    pending_count = len(queued_files)
                     self._status.current_file = "rolling"
-                    self._status.message = f"正在采集窗口：每 {interval_sec} 秒滚动写文件"
+                    self._status.message = f"正在采集窗口：每 {interval_sec} 秒滚动写文件，待分析 {pending_count} 个"
                 if self._stop_event.wait(timeout=1):
                     break
         except Exception as exc:  # pragma: no cover
@@ -686,7 +734,10 @@ class OnlineCaptureManager:
         finally:
             if proc.poll() is None:
                 _terminate_process(proc)
-            self._drain_rotated_files(processed_files, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec, finalize=True)
+            _enqueue_rotated_files(finalize=True)
+            analyzer_done.set()
+            pending_event.set()
+            analyzer.join(timeout=10)
             self._proc = None
 
         with self._lock:
@@ -712,39 +763,26 @@ class OnlineCaptureManager:
                 cmd.extend(shlex.split(bpf_filter))
         return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def _drain_rotated_files(
-        self, processed_files: set[Path], idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int, finalize: bool
+    def _process_rotated_file(
+        self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
     ) -> None:
-        files = sorted(self.output_dir.glob("online*.pcap"), key=lambda p: p.name)
-        if not files:
-            return
-        candidates = files if finalize else files[:-1]
-        for file_path in candidates:
-            if file_path in processed_files or not file_path.exists():
-                continue
-            try:
-                if file_path.stat().st_mtime + 1e-6 < self._run_started_at:
-                    continue
-            except OSError:
-                continue
-            detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
-                file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
-            )
-            processed_files.add(file_path)
-            finished = _now_text()
-            with self._lock:
-                self._status.last_window_finished_at = finished
-                self._status.last_pcap = str(file_path)
-                self._status.last_detected = detected
-                self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
-                self._status.last_ready_flows = ready_flows
-                self._status.last_inserted = inserted
-                self._status.last_deleted_pcaps = deleted_pcaps
-                self._status.total_deleted_pcaps += deleted_pcaps
-                self._status.total_windows += 1
-                self._status.total_detected += detected
-                self._status.total_inserted += inserted
-                self._refresh_cache_status_locked()
+        detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
+            file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
+        )
+        finished = _now_text()
+        with self._lock:
+            self._status.last_window_finished_at = finished
+            self._status.last_pcap = str(file_path)
+            self._status.last_detected = detected
+            self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
+            self._status.last_ready_flows = ready_flows
+            self._status.last_inserted = inserted
+            self._status.last_deleted_pcaps = deleted_pcaps
+            self._status.total_deleted_pcaps += deleted_pcaps
+            self._status.total_windows += 1
+            self._status.total_detected += detected
+            self._status.total_inserted += inserted
+            self._refresh_cache_status_locked()
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
@@ -969,7 +1007,7 @@ def _cleanup_expired_pcaps(output_dir: Path, retention_sec: int) -> int:
         return 0
     cutoff = time.time() - retention_sec
     deleted = 0
-    for pattern in ("online_*.pcap", "ready_*.pcap"):
+    for pattern in ("ready_*.pcap",):
         for path in output_dir.glob(pattern):
             try:
                 if path.stat().st_mtime <= cutoff and _delete_file(path):
