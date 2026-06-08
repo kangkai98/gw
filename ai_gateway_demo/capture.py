@@ -53,7 +53,12 @@ class CaptureStatus:
     total_deleted_pcaps: int = 0
     last_detected: int = 0
     last_inserted: int = 0
+    pending_online_windows: int = 0
+    total_capture_windows: int = 0
     total_windows: int = 0
+    last_analysis_file: str | None = None
+    last_analysis_file_size_bytes: int = 0
+    last_analysis_duration_sec: float | None = None
     total_detected: int = 0
     total_inserted: int = 0
     last_error: str | None = None
@@ -680,6 +685,9 @@ class OnlineCaptureManager:
                         continue
                     pending_files.append(file_path)
                     queued_files.add(file_path)
+                    with self._lock:
+                        self._status.total_capture_windows += 1
+                        self._status.pending_online_windows = len(queued_files)
                 if pending_files:
                     pending_event.set()
 
@@ -706,6 +714,8 @@ class OnlineCaptureManager:
                     with pending_lock:
                         queued_files.discard(file_path)
                         processed_files.add(file_path)
+                        with self._lock:
+                            self._status.pending_online_windows = len(queued_files)
 
         analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
         analyzer.start()
@@ -723,8 +733,13 @@ class OnlineCaptureManager:
                     break
                 with self._lock:
                     pending_count = len(queued_files)
+                    self._status.pending_online_windows = pending_count
                     self._status.current_file = "rolling"
-                    self._status.message = f"正在采集窗口：每 {interval_sec} 秒滚动写文件，待分析 {pending_count} 个"
+                    self._status.message = (
+                        f"正在采集窗口：每 {interval_sec} 秒滚动写文件，"
+                        f"已采集 {self._status.total_capture_windows} 个，"
+                        f"已分析 {self._status.total_windows} 个，待分析 online {pending_count} 个"
+                    )
                 if self._stop_event.wait(timeout=1):
                     break
         except Exception as exc:  # pragma: no cover
@@ -766,15 +781,26 @@ class OnlineCaptureManager:
     def _process_rotated_file(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
     ) -> None:
+        analysis_started = time.perf_counter()
         detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
             file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
         )
+        analysis_duration_sec = time.perf_counter() - analysis_started
+        analysis_file = analyzed_pcap or file_path
+        analysis_file_size = 0
+        try:
+            analysis_file_size = analysis_file.stat().st_size if analysis_file and analysis_file.exists() else 0
+        except OSError:
+            analysis_file_size = 0
         finished = _now_text()
         with self._lock:
             self._status.last_window_finished_at = finished
             self._status.last_pcap = str(file_path)
             self._status.last_detected = detected
             self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
+            self._status.last_analysis_file = str(analysis_file) if analysis_file else None
+            self._status.last_analysis_file_size_bytes = analysis_file_size
+            self._status.last_analysis_duration_sec = round(analysis_duration_sec, 3)
             self._status.last_ready_flows = ready_flows
             self._status.last_inserted = inserted
             self._status.last_deleted_pcaps = deleted_pcaps
