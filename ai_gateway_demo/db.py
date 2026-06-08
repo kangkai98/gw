@@ -23,6 +23,19 @@ ENTRY_COLUMNS: dict[str, str] = {
     "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
 }
 
+TRAFFIC_SUMMARY_COLUMNS: dict[str, str] = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "source": "TEXT NOT NULL",
+    "pcap_path": "TEXT NOT NULL",
+    "window_start_time": "TEXT",
+    "window_end_time": "TEXT",
+    "uplink_total_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "downlink_total_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "uplink_ai_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "downlink_ai_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+}
+
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -57,10 +70,24 @@ def _ensure_entry_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {name} {ddl}")
 
 
+def _ensure_traffic_summary_schema(conn: sqlite3.Connection) -> None:
+    cols = conn.execute("PRAGMA table_info(traffic_summaries)").fetchall()
+    if not cols:
+        fields = ",\n                ".join(f"{name} {ddl}" for name, ddl in TRAFFIC_SUMMARY_COLUMNS.items())
+        conn.execute(f"CREATE TABLE traffic_summaries ({fields})")
+        return
+
+    existing = {row[1] for row in cols}
+    for name, ddl in TRAFFIC_SUMMARY_COLUMNS.items():
+        if name not in existing and "PRIMARY KEY" not in ddl:
+            conn.execute(f"ALTER TABLE traffic_summaries ADD COLUMN {name} {ddl}")
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         _ensure_entry_schema(conn)
+        _ensure_traffic_summary_schema(conn)
         _ensure_self_hosted_schema(conn)
         conn.commit()
     finally:
@@ -130,7 +157,35 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         conn.execute("DELETE FROM entries")
+        conn.execute("DELETE FROM traffic_summaries")
         _reset_autoincrement(conn, "entries")
+        _reset_autoincrement(conn, "traffic_summaries")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_traffic_summary(summary: dict[str, Any], db_path: Path = DB_PATH) -> None:
+    conn = get_conn(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO traffic_summaries (
+                source, pcap_path, window_start_time, window_end_time,
+                uplink_total_bytes, downlink_total_bytes, uplink_ai_bytes, downlink_ai_bytes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                summary.get("source") or "unknown",
+                summary.get("pcap_path") or "",
+                summary.get("window_start_time"),
+                summary.get("window_end_time"),
+                int(summary.get("uplink_total_bytes") or 0),
+                int(summary.get("downlink_total_bytes") or 0),
+                int(summary.get("uplink_ai_bytes") or 0),
+                int(summary.get("downlink_ai_bytes") or 0),
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -185,6 +240,18 @@ def list_entries(
         conn.close()
 
 
+
+def _build_traffic_filters(start_real: str | None = None, end_real: str | None = None) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if start_real:
+        clauses.append("COALESCE(window_end_time, window_start_time, created_at) >= ?")
+        params.append(start_real)
+    if end_real:
+        clauses.append("COALESCE(window_start_time, window_end_time, created_at) <= ?")
+        params.append(end_real)
+    return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
 def get_stats(
     category_major: str | None = None,
     category_minor: str | None = None,
@@ -233,12 +300,30 @@ def get_stats(
         duration = (max_end - min_start) if (min_start is not None and max_end is not None) else 0
         rps = (totals["total_entries"] / duration) if duration and duration > 0 else 0
 
+        traffic_where_sql, traffic_params = _build_traffic_filters(start_real, end_real)
+        traffic = conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(uplink_total_bytes), 0) AS total_uplink_bytes,
+                COALESCE(SUM(downlink_total_bytes), 0) AS total_downlink_bytes,
+                COALESCE(SUM(uplink_ai_bytes), 0) AS total_uplink_ai_bytes,
+                COALESCE(SUM(downlink_ai_bytes), 0) AS total_downlink_ai_bytes
+            FROM traffic_summaries
+            {traffic_where_sql}
+            """,
+            traffic_params,
+        ).fetchone()
+
         return {
             "total_entries": totals["total_entries"],
             "total_input_tokens": totals["total_input_tokens"],
             "total_output_tokens": totals["total_output_tokens"],
             "rps": round(rps, 1),
             "major_stats": [dict(row) for row in major_rows],
+            "total_uplink_bytes": traffic["total_uplink_bytes"],
+            "total_downlink_bytes": traffic["total_downlink_bytes"],
+            "total_uplink_ai_bytes": traffic["total_uplink_ai_bytes"],
+            "total_downlink_ai_bytes": traffic["total_downlink_ai_bytes"],
         }
     finally:
         conn.close()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -830,7 +831,42 @@ def _infer_entry_flow_key(
     return f"{client_ip}:?-{server_ip}:?"
 
 
+
+
+totals: dict[str, int] = {
+    "uplink_total_bytes": 0,
+    "downlink_total_bytes": 0,
+    "uplink_ai_bytes": 0,
+    "downlink_ai_bytes": 0,
+}
+traffic_totals_lock = threading.Lock()
+
+
+def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | None = None) -> dict[str, int | str | None]:
+    """Return traffic totals collected during the preceding parse step.
+
+    The concrete traffic accounting is intentionally left to parse_pcap_to_entries() so
+    callers can parse a pcap once, then read the summary here without re-reading it.
+    Until that parser-side accounting is added, all traffic totals default to 0.
+    """
+    return {
+        "pcap_path": str(pcap_path),
+        "window_start_time": None,
+        "window_end_time": None,
+        "uplink_total_bytes": int(totals.get("uplink_total_bytes", 0) or 0),
+        "downlink_total_bytes": int(totals.get("downlink_total_bytes", 0) or 0),
+        "uplink_ai_bytes": int(totals.get("uplink_ai_bytes", 0) or 0),
+        "downlink_ai_bytes": int(totals.get("downlink_ai_bytes", 0) or 0),
+    }
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+    totals.update({
+        "uplink_total_bytes": 0,
+        "downlink_total_bytes": 0,
+        "uplink_ai_bytes": 0,
+        "downlink_ai_bytes": 0,
+    })
     packets = extract_packets(pcap_path)
     if not packets:
         return []
