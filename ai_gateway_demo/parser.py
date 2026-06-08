@@ -215,7 +215,6 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
         )
     return sorted(result, key=lambda x: x.ts)
 
-
 def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
     groups: dict[str, list[PacketMeta]] = defaultdict(list)
     for p in pkts:

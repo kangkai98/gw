@@ -6,6 +6,8 @@ import subprocess
 import threading
 import time
 import platform
+import multiprocessing
+import queue as queue_module
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,6 +22,55 @@ from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_total
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
+
+
+def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
+    try:
+        path = Path(pcap_path)
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(path, self_hosted_configs=configs)
+        result_queue.put(("ok", entries, traffic_summary))
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}", None))
+
+
+def _parse_ready_pcap_in_process(
+    pcap_path: Path, configs: list[dict], stop_event: threading.Event
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if "fork" not in multiprocessing.get_all_start_methods():
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
+
+    ctx = multiprocessing.get_context("fork")
+    result_queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(target=_parse_ready_pcap_worker, args=(str(pcap_path), configs, result_queue), daemon=True)
+    proc.start()
+    try:
+        while True:
+            if stop_event.is_set():
+                proc.terminate()
+                proc.join(timeout=2)
+                raise RuntimeError("ready分析已因停止监听中断")
+            try:
+                status, entries, traffic_summary = result_queue.get(timeout=0.5)
+                break
+            except queue_module.Empty:
+                if not proc.is_alive():
+                    proc.join(timeout=0.5)
+                    raise RuntimeError(f"ready分析子进程异常退出：{proc.exitcode}")
+        proc.join(timeout=2)
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=2)
+        result_queue.close()
+
+    if status == "error":
+        raise RuntimeError(entries)
+    return entries, traffic_summary
 
 
 @dataclass
@@ -755,6 +806,8 @@ class OnlineCaptureManager:
         def _ready_worker() -> None:
             while True:
                 ready_event.wait(timeout=0.5)
+                if ready_done.is_set() and self._stop_event.is_set():
+                    break
                 ready_pcap: Path | None = None
                 with ready_lock:
                     if ready_files:
@@ -820,7 +873,7 @@ class OnlineCaptureManager:
             analyzer.join(timeout=10)
             ready_done.set()
             ready_event.set()
-            ready_analyzer.join(timeout=10)
+            ready_analyzer.join(timeout=1)
             self._proc = None
 
         with self._lock:
@@ -873,10 +926,8 @@ class OnlineCaptureManager:
     def _process_ready_file(self, analyzed_pcap: Path, pcap_retention_sec: int) -> None:
         analysis_started = time.perf_counter()
         configs = list_self_hosted()
-        with traffic_totals_lock:
-            entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
-            traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
-            insert_traffic_summary({**traffic_summary, "source": "online"})
+        entries, traffic_summary = _parse_ready_pcap_in_process(analyzed_pcap, configs, self._stop_event)
+        insert_traffic_summary({**traffic_summary, "source": "online"})
         inserted = 0
         for entry in entries:
             if not insert_entry(entry):
