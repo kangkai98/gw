@@ -12,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from scapy.all import IP, TCP, PcapReader, wrpcap
+from scapy.all import IP, TCP, PcapReader
+from scapy.utils import RawPcapReader, RawPcapWriter
 
 from .db import insert_entry, insert_traffic_summary, list_self_hosted
 from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
@@ -26,7 +27,10 @@ class CachedTcpPacket:
     ts: float
     flow_key: str
     tcp_flags: int
-    packet: Any
+    raw_packet: bytes
+    cap_len: int
+    wire_len: int
+    link_type: int
     capture_seq: int
 
 
@@ -1004,22 +1008,96 @@ def _resolve_windows_interface(interface: str) -> str:
 
 def _extract_cached_tcp_packets(pcap_path: Path, start_seq: int = 0) -> list[CachedTcpPacket]:
     result: list[CachedTcpPacket] = []
+    try:
+        reader = RawPcapReader(str(pcap_path))
+    except Exception:
+        return _extract_cached_tcp_packets_scapy(pcap_path, start_seq)
+    try:
+        if getattr(reader, "linktype", None) != 1:
+            reader.close()
+            return _extract_cached_tcp_packets_scapy(pcap_path, start_seq)
+        for raw_packet, meta in reader:
+            tcp_meta = _extract_ipv4_tcp_meta_from_ethernet(raw_packet)
+            if tcp_meta is None:
+                continue
+            src, sport, dst, dport, tcp_flags = tcp_meta
+            result.append(
+                CachedTcpPacket(
+                    ts=float(meta.sec) + float(meta.usec) / 1_000_000,
+                    flow_key=_canonical_flow_key(src, sport, dst, dport),
+                    tcp_flags=tcp_flags,
+                    raw_packet=bytes(raw_packet),
+                    cap_len=int(meta.caplen),
+                    wire_len=int(meta.wirelen),
+                    link_type=int(getattr(reader, "linktype", 1) or 1),
+                    capture_seq=start_seq + len(result),
+                )
+            )
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
+    return result
+
+
+def _extract_cached_tcp_packets_scapy(pcap_path: Path, start_seq: int = 0) -> list[CachedTcpPacket]:
+    result: list[CachedTcpPacket] = []
     with PcapReader(str(pcap_path)) as reader:
+        link_type = int(getattr(reader, "linktype", 1) or 1)
         for packet in reader:
             if IP not in packet or TCP not in packet:
                 continue
             ip = packet[IP]
             tcp = packet[TCP]
+            raw_packet = bytes(packet)
             result.append(
                 CachedTcpPacket(
                     ts=float(packet.time),
                     flow_key=_canonical_flow_key(str(ip.src), int(tcp.sport), str(ip.dst), int(tcp.dport)),
                     tcp_flags=int(tcp.flags),
-                    packet=packet.copy(),
+                    raw_packet=raw_packet,
+                    cap_len=len(raw_packet),
+                    wire_len=int(getattr(packet, "wirelen", len(raw_packet)) or len(raw_packet)),
+                    link_type=link_type,
                     capture_seq=start_seq + len(result),
                 )
             )
     return result
+
+
+def _extract_ipv4_tcp_meta_from_ethernet(raw_packet: bytes) -> tuple[str, int, str, int, int] | None:
+    if len(raw_packet) < 14:
+        return None
+    eth_type = int.from_bytes(raw_packet[12:14], "big")
+    ip_offset = 14
+    while eth_type in (0x8100, 0x88A8, 0x9100):
+        if len(raw_packet) < ip_offset + 4:
+            return None
+        eth_type = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+        ip_offset += 4
+    if eth_type != 0x0800 or len(raw_packet) < ip_offset + 20:
+        return None
+    version_ihl = raw_packet[ip_offset]
+    if version_ihl >> 4 != 4:
+        return None
+    ihl = (version_ihl & 0x0F) * 4
+    if ihl < 20 or len(raw_packet) < ip_offset + ihl:
+        return None
+    if raw_packet[ip_offset + 9] != 6:
+        return None
+    fragment = int.from_bytes(raw_packet[ip_offset + 6 : ip_offset + 8], "big")
+    if fragment & 0x1FFF:
+        return None
+    tcp_offset = ip_offset + ihl
+    if len(raw_packet) < tcp_offset + 14:
+        return None
+    src = ".".join(str(part) for part in raw_packet[ip_offset + 12 : ip_offset + 16])
+    dst = ".".join(str(part) for part in raw_packet[ip_offset + 16 : ip_offset + 20])
+    sport = int.from_bytes(raw_packet[tcp_offset : tcp_offset + 2], "big")
+    dport = int.from_bytes(raw_packet[tcp_offset + 2 : tcp_offset + 4], "big")
+    tcp_flags = raw_packet[tcp_offset + 13]
+    return src, sport, dst, dport, tcp_flags
 
 
 def _group_cached_flows(packets: list[CachedTcpPacket]) -> dict[str, list[CachedTcpPacket]]:
@@ -1039,13 +1117,26 @@ def _canonical_flow_key(src: str, sport: int, dst: str, dport: int) -> str:
 
 def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket]) -> None:
     ordered = sorted(packets, key=lambda x: x.capture_seq)
-    scapy_packets = []
-    for cached in ordered:
-        packet = cached.packet.copy()
-        packet.time = cached.ts
-        scapy_packets.append(packet)
     pcap_path.parent.mkdir(parents=True, exist_ok=True)
-    wrpcap(str(pcap_path), scapy_packets)
+    link_type = ordered[0].link_type if ordered else 1
+    writer = RawPcapWriter(str(pcap_path), linktype=link_type, sync=True)
+    writer.write_header(None)
+    try:
+        for cached in ordered:
+            sec = int(cached.ts)
+            usec = int(round((cached.ts - sec) * 1_000_000))
+            if usec >= 1_000_000:
+                sec += 1
+                usec -= 1_000_000
+            writer.write_packet(
+                cached.raw_packet,
+                sec=sec,
+                usec=usec,
+                caplen=cached.cap_len,
+                wirelen=cached.wire_len,
+            )
+    finally:
+        writer.close()
 
 
 def _ready_pcap_path(output_dir: Path, observation_ts: float, source_path: Path) -> Path:
