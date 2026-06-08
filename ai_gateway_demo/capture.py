@@ -65,6 +65,7 @@ class CaptureStatus:
     analyzed_online_files: int = 0
     total_ready_files: int = 0
     analyzed_ready_files: int = 0
+    pending_ready_files: int = 0
     last_analysis_file: str | None = None
     last_analysis_file_size_bytes: int = 0
     last_analysis_duration_sec: float | None = None
@@ -681,6 +682,24 @@ class OnlineCaptureManager:
         pending_event = threading.Event()
         analyzer_done = threading.Event()
 
+        ready_files: deque[Path] = deque()
+        ready_queued: set[Path] = set()
+        ready_lock = threading.Lock()
+        ready_event = threading.Event()
+        ready_done = threading.Event()
+
+        def _enqueue_ready_file(ready_pcap: Path | None) -> None:
+            if ready_pcap is None:
+                return
+            with ready_lock:
+                if ready_pcap in ready_queued:
+                    return
+                ready_files.append(ready_pcap)
+                ready_queued.add(ready_pcap)
+                with self._lock:
+                    self._status.pending_ready_files = len(ready_queued)
+                ready_event.set()
+
         def _enqueue_rotated_files(finalize: bool) -> None:
             files = sorted(self.output_dir.glob("online*.pcap"), key=lambda p: p.name)
             candidates = files if finalize else files[:-1]
@@ -717,11 +736,14 @@ class OnlineCaptureManager:
                         break
                     continue
                 try:
-                    self._process_rotated_file(file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec)
+                    ready_pcap = self._process_rotated_file(
+                        file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
+                    )
+                    _enqueue_ready_file(ready_pcap)
                 except Exception as exc:  # pragma: no cover - depends on local pcap/parser state
                     with self._lock:
                         self._status.last_error = str(exc)
-                        self._status.message = f"在线监听分析异常：{exc}"
+                        self._status.message = f"在线监听online处理异常：{exc}"
                 finally:
                     with pending_lock:
                         queued_files.discard(file_path)
@@ -730,8 +752,35 @@ class OnlineCaptureManager:
                             self._status.pending_online_windows = len(queued_files)
                             self._status.pending_online_files = len(queued_files)
 
-        analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-analyze", daemon=True)
+        def _ready_worker() -> None:
+            while True:
+                ready_event.wait(timeout=0.5)
+                ready_pcap: Path | None = None
+                with ready_lock:
+                    if ready_files:
+                        ready_pcap = ready_files.popleft()
+                    else:
+                        ready_event.clear()
+                if ready_pcap is None:
+                    if ready_done.is_set():
+                        break
+                    continue
+                try:
+                    self._process_ready_file(ready_pcap, pcap_retention_sec)
+                except Exception as exc:  # pragma: no cover - depends on parser/db state
+                    with self._lock:
+                        self._status.last_error = str(exc)
+                        self._status.message = f"在线监听ready分析异常：{exc}"
+                finally:
+                    with ready_lock:
+                        ready_queued.discard(ready_pcap)
+                        with self._lock:
+                            self._status.pending_ready_files = len(ready_queued)
+
+        analyzer = threading.Thread(target=_analyze_worker, name="ai-gateway-online-ingest", daemon=True)
+        ready_analyzer = threading.Thread(target=_ready_worker, name="ai-gateway-ready-analyze", daemon=True)
         analyzer.start()
+        ready_analyzer.start()
         proc = self._start_continuous_capture(interface, interval_sec, bpf_filter, mode=mode)
         self._proc = proc
         try:
@@ -752,8 +801,9 @@ class OnlineCaptureManager:
                     self._status.message = (
                         f"正在采集：每 {interval_sec} 秒生成 online 文件，"
                         f"online 已生成 {self._status.total_online_files} 个，"
-                        f"已分析 {self._status.analyzed_online_files} 个，待分析 {pending_count} 个；"
-                        f"ready 已生成 {self._status.total_ready_files} 个，已分析 {self._status.analyzed_ready_files} 个"
+                        f"已处理 {self._status.analyzed_online_files} 个，待处理 {pending_count} 个；"
+                        f"ready 已生成 {self._status.total_ready_files} 个，"
+                        f"已分析 {self._status.analyzed_ready_files} 个，待分析 {self._status.pending_ready_files} 个"
                     )
                 if self._stop_event.wait(timeout=1):
                     break
@@ -768,6 +818,9 @@ class OnlineCaptureManager:
             analyzer_done.set()
             pending_event.set()
             analyzer.join(timeout=10)
+            ready_done.set()
+            ready_event.set()
+            ready_analyzer.join(timeout=10)
             self._proc = None
 
         with self._lock:
@@ -795,38 +848,75 @@ class OnlineCaptureManager:
 
     def _process_rotated_file(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
-    ) -> None:
+    ) -> Path | None:
         analysis_started = time.perf_counter()
         detected, inserted, ready_flows, analyzed_pcap, deleted_pcaps = self._dispatch_analyze_window(
             file_path, idle_timeout_sec, max_flow_duration_sec, pcap_retention_sec
         )
         analysis_duration_sec = time.perf_counter() - analysis_started
-        analysis_file = analyzed_pcap or file_path
-        analysis_file_size = 0
-        try:
-            analysis_file_size = analysis_file.stat().st_size if analysis_file and analysis_file.exists() else 0
-        except OSError:
-            analysis_file_size = 0
-        if analysis_file_size == 0 and analyzed_pcap:
-            analysis_file_size = self._last_analyzed_pcap_size_bytes
         finished = _now_text()
         with self._lock:
             self._status.last_window_finished_at = finished
             self._status.last_pcap = str(file_path)
             self._status.last_detected = detected
             self._status.last_analyzed_pcap = str(analyzed_pcap) if analyzed_pcap else None
-            self._status.last_analysis_file = str(analysis_file) if analysis_file else None
-            self._status.last_analysis_file_size_bytes = analysis_file_size
-            self._status.last_analysis_duration_sec = round(analysis_duration_sec, 3)
             self._status.last_ready_flows = ready_flows
             self._status.last_inserted = inserted
             self._status.last_deleted_pcaps = deleted_pcaps
             self._status.total_deleted_pcaps += deleted_pcaps
             self._status.total_windows += 1
             self._status.analyzed_online_files = self._status.total_windows
-            self._status.total_detected += detected
-            self._status.total_inserted += inserted
+            self._status.last_analysis_duration_sec = round(analysis_duration_sec, 3)
             self._refresh_cache_status_locked()
+        return analyzed_pcap
+
+    def _process_ready_file(self, analyzed_pcap: Path, pcap_retention_sec: int) -> None:
+        analysis_started = time.perf_counter()
+        configs = list_self_hosted()
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
+            insert_traffic_summary({**traffic_summary, "source": "online"})
+        inserted = 0
+        for entry in entries:
+            if not insert_entry(entry):
+                continue
+            inserted += 1
+            if self.on_entry_inserted:
+                try:
+                    self.on_entry_inserted(entry)
+                except Exception:
+                    pass
+        analysis_duration_sec = time.perf_counter() - analysis_started
+        analysis_file_size = 0
+        try:
+            analysis_file_size = analyzed_pcap.stat().st_size if analyzed_pcap.exists() else 0
+        except OSError:
+            analysis_file_size = 0
+        if analysis_file_size == 0:
+            analysis_file_size = self._last_analyzed_pcap_size_bytes
+        deleted_pcaps = 0
+        if pcap_retention_sec == 0 and _delete_file(analyzed_pcap):
+            deleted_pcaps += 1
+        deleted_pcaps += _cleanup_expired_pcaps(
+            self.output_dir,
+            pcap_retention_sec,
+            keep_latest_online=self._proc is not None and self._proc.poll() is None,
+        )
+        finished = _now_text()
+        with self._lock:
+            self._status.last_window_finished_at = finished
+            self._status.last_detected = len(entries)
+            self._status.last_inserted = inserted
+            self._status.last_analyzed_pcap = str(analyzed_pcap)
+            self._status.last_analysis_file = str(analyzed_pcap)
+            self._status.last_analysis_file_size_bytes = analysis_file_size
+            self._status.last_analysis_duration_sec = round(analysis_duration_sec, 3)
+            self._status.last_deleted_pcaps = deleted_pcaps
+            self._status.total_deleted_pcaps += deleted_pcaps
+            self._status.total_detected += len(entries)
+            self._status.total_inserted += inserted
+            self._status.analyzed_ready_files += 1
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
@@ -921,28 +1011,8 @@ class OnlineCaptureManager:
         with self._lock:
             self._status.total_ready_files += 1
 
-        configs = list_self_hosted()
-        with traffic_totals_lock:
-            entries = parse_pcap_to_entries(analyzed_pcap, self_hosted_configs=configs)
-            traffic_summary = summarize_pcap_traffic(analyzed_pcap, self_hosted_configs=configs)
-            insert_traffic_summary({**traffic_summary, "source": "online"})
-        with self._lock:
-            self._status.analyzed_ready_files += 1
-        inserted = 0
-        for entry in entries:
-            if not insert_entry(entry):
-                continue
-            inserted += 1
-            if self.on_entry_inserted:
-                try:
-                    self.on_entry_inserted(entry)
-                except Exception:
-                    pass
-
         for key in ready_keys:
             self._flow_cache.pop(key, None)
-        if pcap_retention_sec == 0 and _delete_file(analyzed_pcap):
-            deleted_pcaps += 1
         deleted_pcaps += _cleanup_expired_pcaps(
             self.output_dir,
             pcap_retention_sec,
@@ -950,7 +1020,7 @@ class OnlineCaptureManager:
         )
         with self._lock:
             self._refresh_cache_status_locked()
-        return len(entries), inserted, len(ready_keys), analyzed_pcap, deleted_pcaps
+        return 0, 0, len(ready_keys), analyzed_pcap, deleted_pcaps
 
     def _ready_flow_keys(
         self, observation_ts: float, idle_timeout_sec: int, max_flow_duration_sec: int
