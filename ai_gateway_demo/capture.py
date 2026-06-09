@@ -849,11 +849,13 @@ class OnlineCaptureManager:
             while not self._stop_event.is_set():
                 _enqueue_rotated_files(finalize=False)
                 if proc.poll() is not None:
-                    _, stderr = proc.communicate(timeout=5)
+                    proc.communicate(timeout=5)
                     if proc.returncode not in (0, -15, -2, 143, 130, 1):
-                        err = stderr.decode("utf-8", errors="ignore").strip()
-                        tool_name = "tshark" if mode == "windows" else "tcpdump"
-                        raise RuntimeError(err or f"{tool_name} 退出码 {proc.returncode}")
+                        tool_name = "dumpcap/tshark" if mode == "windows" else "tcpdump"
+                        raise RuntimeError(
+                            f"{tool_name} 退出码 {proc.returncode}，"
+                            f"详情请查看 {self.output_dir / 'capture_subprocess.log'}"
+                        )
                     break
                 with self._lock:
                     pending_count = len(queued_files)
@@ -893,12 +895,43 @@ class OnlineCaptureManager:
 
     def _start_continuous_capture(self, interface: str, interval_sec: int, bpf_filter: str, mode: str) -> subprocess.Popen[bytes]:
         if mode == "windows":
-            if shutil.which("tshark") is None:
-                raise RuntimeError("未找到 tshark，请安装 Wireshark 并将 tshark 加入 PATH")
             base_file = self.output_dir / "online.pcap"
-            cmd = ["tshark", "-i", interface, "-F", "pcap", "-b", f"duration:{interval_sec}", "-w", str(base_file)]
-            if bpf_filter:
-                cmd.extend(["-f", bpf_filter])
+            if shutil.which("dumpcap"):
+                # dumpcap is Wireshark's lightweight capture engine and is more stable for
+                # long-running high-throughput capture than tshark.  -P asks dumpcap to
+                # write libpcap instead of pcapng when the installed version supports it.
+                cmd = [
+                    "dumpcap",
+                    "-i",
+                    interface,
+                    "-P",
+                    "-s",
+                    "0",
+                    "-b",
+                    f"duration:{interval_sec}",
+                    "-w",
+                    str(base_file),
+                    "-q",
+                ]
+                if bpf_filter:
+                    cmd.extend(["-f", bpf_filter])
+            elif shutil.which("tshark"):
+                cmd = [
+                    "tshark",
+                    "-i",
+                    interface,
+                    "-F",
+                    "pcap",
+                    "-b",
+                    f"duration:{interval_sec}",
+                    "-w",
+                    str(base_file),
+                    "-q",
+                ]
+                if bpf_filter:
+                    cmd.extend(["-f", bpf_filter])
+            else:
+                raise RuntimeError("未找到 dumpcap/tshark，请安装 Wireshark（含命令行工具）")
         else:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
@@ -906,7 +939,7 @@ class OnlineCaptureManager:
             cmd = ["tcpdump", "-i", interface, "-s", "0", "-G", str(interval_sec), "-w", str(pattern)]
             if bpf_filter:
                 cmd.extend(shlex.split(bpf_filter))
-        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return _start_capture_process(cmd, self.output_dir / "capture_subprocess.log")
 
     def _process_rotated_file(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
@@ -1016,7 +1049,7 @@ class OnlineCaptureManager:
                     _terminate_process(proc)
             _, stderr = proc.communicate(timeout=5)
             if proc.returncode not in (0, -15, -2, 143, 130, 1):
-                err = stderr.decode("utf-8", errors="ignore").strip()
+                err = stderr.decode("utf-8", errors="ignore").strip() if stderr else ""
                 tool_name = "tshark" if mode == "windows" else "tcpdump"
                 raise RuntimeError(err or f"{tool_name} 退出码 {proc.returncode}")
         finally:
@@ -1315,6 +1348,12 @@ def _delete_file(path: Path) -> bool:
         return False
     except OSError:
         return False
+
+
+def _start_capture_process(cmd: list[str], log_path: Path) -> subprocess.Popen[bytes]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab") as log_file:
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
 
 
 def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
