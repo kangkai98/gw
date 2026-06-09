@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from scapy.all import IP, TCP, Raw, rdpcap
+from scapy.utils import RawPcapReader
 
 TOKEN_LOG_ENABLE = True
 TOKEN_LOG_PATH = os.path.join("uploads", "token_calc.log")
@@ -190,6 +192,13 @@ def _has_token_payload(payload: str) -> bool:
 
 
 def extract_packets(pcap_path: Path) -> list[PacketMeta]:
+    raw_packets = _extract_packets_raw(pcap_path)
+    if raw_packets is not None:
+        return raw_packets
+    return _extract_packets_scapy(pcap_path)
+
+
+def _extract_packets_scapy(pcap_path: Path) -> list[PacketMeta]:
     packets = rdpcap(str(pcap_path))
     result: list[PacketMeta] = []
     for p in packets:
@@ -208,12 +217,90 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
                 payload=decode_payload(raw_bytes),
                 flow_key=f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}",
                 raw=raw_bytes,
-                wire_len=int(len(p)),
+                wire_len=int(getattr(p, "wirelen", len(p)) or len(p)),
                 sni=_extract_tls_sni(raw_bytes),
             )
         )
     return sorted(result, key=lambda x: x.ts)
 
+
+def _extract_packets_raw(pcap_path: Path) -> list[PacketMeta] | None:
+    try:
+        reader = RawPcapReader(str(pcap_path))
+    except Exception:
+        return None
+    result: list[PacketMeta] = []
+    try:
+        if getattr(reader, "linktype", None) != 1:
+            return None
+        for raw_packet, meta in reader:
+            parsed = _extract_ipv4_tcp_meta_from_ethernet(raw_packet)
+            if parsed is None:
+                continue
+            src, sport, dst, dport, raw_bytes = parsed
+            result.append(
+                PacketMeta(
+                    ts=float(meta.sec) + float(meta.usec) / 1_000_000,
+                    src=src,
+                    dst=dst,
+                    sport=sport,
+                    dport=dport,
+                    payload=decode_payload(raw_bytes),
+                    flow_key=f"{src}:{sport}-{dst}:{dport}",
+                    raw=raw_bytes,
+                    wire_len=int(meta.wirelen),
+                    sni=_extract_tls_sni(raw_bytes),
+                )
+            )
+    except Exception:
+        return None
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
+    return sorted(result, key=lambda x: x.ts)
+
+
+def _extract_ipv4_tcp_meta_from_ethernet(raw_packet: bytes) -> tuple[str, int, str, int, bytes] | None:
+    if len(raw_packet) < 14:
+        return None
+    eth_type = int.from_bytes(raw_packet[12:14], "big")
+    ip_offset = 14
+    while eth_type in (0x8100, 0x88A8, 0x9100):
+        if len(raw_packet) < ip_offset + 4:
+            return None
+        eth_type = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+        ip_offset += 4
+    if eth_type != 0x0800 or len(raw_packet) < ip_offset + 20:
+        return None
+    version_ihl = raw_packet[ip_offset]
+    if version_ihl >> 4 != 4:
+        return None
+    ihl = (version_ihl & 0x0F) * 4
+    if ihl < 20 or len(raw_packet) < ip_offset + ihl:
+        return None
+    total_len = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+    if total_len < ihl:
+        return None
+    if raw_packet[ip_offset + 9] != 6:
+        return None
+    fragment = int.from_bytes(raw_packet[ip_offset + 6 : ip_offset + 8], "big")
+    if fragment & 0x3FFF:
+        return None
+    tcp_offset = ip_offset + ihl
+    ip_end = min(len(raw_packet), ip_offset + total_len)
+    if ip_end < tcp_offset + 20:
+        return None
+    data_offset = (raw_packet[tcp_offset + 12] >> 4) * 4
+    if data_offset < 20 or ip_end < tcp_offset + data_offset:
+        return None
+    src = ".".join(str(part) for part in raw_packet[ip_offset + 12 : ip_offset + 16])
+    dst = ".".join(str(part) for part in raw_packet[ip_offset + 16 : ip_offset + 20])
+    sport = int.from_bytes(raw_packet[tcp_offset : tcp_offset + 2], "big")
+    dport = int.from_bytes(raw_packet[tcp_offset + 2 : tcp_offset + 4], "big")
+    payload = bytes(raw_packet[tcp_offset + data_offset : ip_end])
+    return src, sport, dst, dport, payload
 
 def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
     groups: dict[str, list[PacketMeta]] = defaultdict(list)
@@ -830,7 +917,42 @@ def _infer_entry_flow_key(
     return f"{client_ip}:?-{server_ip}:?"
 
 
+
+
+totals: dict[str, int] = {
+    "uplink_total_bytes": 0,
+    "downlink_total_bytes": 0,
+    "uplink_ai_bytes": 0,
+    "downlink_ai_bytes": 0,
+}
+traffic_totals_lock = threading.Lock()
+
+
+def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | None = None) -> dict[str, int | str | None]:
+    """Return traffic totals collected during the preceding parse step.
+
+    The concrete traffic accounting is intentionally left to parse_pcap_to_entries() so
+    callers can parse a pcap once, then read the summary here without re-reading it.
+    Until that parser-side accounting is added, all traffic totals default to 0.
+    """
+    return {
+        "pcap_path": str(pcap_path),
+        "window_start_time": None,
+        "window_end_time": None,
+        "uplink_total_bytes": int(totals.get("uplink_total_bytes", 0) or 0),
+        "downlink_total_bytes": int(totals.get("downlink_total_bytes", 0) or 0),
+        "uplink_ai_bytes": int(totals.get("uplink_ai_bytes", 0) or 0),
+        "downlink_ai_bytes": int(totals.get("downlink_ai_bytes", 0) or 0),
+    }
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+    totals.update({
+        "uplink_total_bytes": 0,
+        "downlink_total_bytes": 0,
+        "uplink_ai_bytes": 0,
+        "downlink_ai_bytes": 0,
+    })
     packets = extract_packets(pcap_path)
     if not packets:
         return []

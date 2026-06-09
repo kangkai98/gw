@@ -28,11 +28,12 @@ from .db import (
     get_stats,
     init_db,
     insert_entry,
+    insert_traffic_summary,
     list_entries,
     list_self_hosted,
     refresh_entry_categories_by_self_hosted,
 )
-from .parser import parse_pcap_to_entries
+from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
 
 app = FastAPI(title="AI Gateway Demo")
 
@@ -75,6 +76,7 @@ _next_probe_task_id = 1
 _follow_probe_tasks: dict[int, FollowProbeTask] = {}
 _next_follow_probe_task_id = 1
 DEFAULT_HEALTH_CFG = {"ttft_alert": 3500.0, "tpot_alert": 180.0}
+_TEXT_DECODE_KWARGS = {"encoding": "utf-8", "errors": "ignore"}
 
 
 def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
@@ -235,7 +237,10 @@ async def api_upload(file: UploadFile = File(...)):
     local_file.write_bytes(content)
 
     configs = list_self_hosted()
-    entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
+    with traffic_totals_lock:
+        entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
+        traffic_summary = summarize_pcap_traffic(local_file, self_hosted_configs=configs)
+        insert_traffic_summary({**traffic_summary, "source": "upload"})
     inserted = 0
     for e in entries:
         if insert_entry(e):
@@ -585,7 +590,7 @@ def api_probe_curl(
         ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, **_TEXT_DECODE_KWARGS)
     except Exception as exc:  # pragma: no cover - runtime dependent
         return {"ok": False, "message": f"curl 执行失败: {exc}"}
 
@@ -658,8 +663,9 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
     if stream_mode:
         if "-N" not in cmd:
             cmd.insert(1, "-N")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_TEXT_DECODE_KWARGS)
         collected: list[str] = []
+        stream_error: str | None = None
         ttfb_ms: float | None = None
         ttft_ms: float | None = None
         while True:
@@ -684,6 +690,9 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
                 data = json.loads(payload_text)
             except Exception:
                 continue
+            if isinstance(data, dict) and data.get("error"):
+                stream_error = str(data.get("error"))
+                continue
             choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
             delta = choice.get("delta") if isinstance(choice, dict) else {}
             if isinstance(delta, dict) and delta.get("content"):
@@ -694,10 +703,16 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
         rc = proc.wait(timeout=1)
         if rc != 0:
             return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        if stream_error:
+            return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "".join(collected)[:2000], "message": f"流式拨测失败: {stream_error}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        if not collected:
+            return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "", "message": "流式拨测失败: 未收到有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
         latency_ms = (time.perf_counter() - t0) * 1000
         return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "ttfb_ms": None if ttfb_ms is None else round(ttfb_ms, 1), "ttft_ms": None if ttft_ms is None else round(ttft_ms, 1), "response_text": "".join(collected)[:2000], "message": "流式拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0, **_TEXT_DECODE_KWARGS
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
     latency_ms = (time.perf_counter() - t0) * 1000
@@ -711,6 +726,10 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
     choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
     message = choice.get("message") if isinstance(choice, dict) else {}
     short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "message": f"标准拨测失败: {parsed.get('error')}", "command": " ".join(shlex.quote(part) for part in cmd)}
+    if not short_text:
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "message": "标准拨测失败: 未返回有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
     return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
 
 
@@ -733,10 +752,13 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     if stream_mode:
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_TEXT_DECODE_KWARGS
+            )
         except Exception as exc:
             return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}", "command": " ".join(shlex.quote(part) for part in cmd)}
         collected: list[str] = []
+        stream_error: str | None = None
         ttfb_ms: float | None = None
         ttft_ms: float | None = None
         try:
@@ -762,6 +784,9 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
                     data = json.loads(payload_text)
                 except Exception:
                     continue
+                if isinstance(data, dict) and data.get("error"):
+                    stream_error = str(data.get("error"))
+                    continue
                 choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
                 delta = choice.get("delta") if isinstance(choice, dict) else {}
                 if isinstance(delta, dict) and delta.get("content"):
@@ -772,6 +797,10 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
             rc = proc.wait(timeout=1)
             if rc != 0:
                 return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+            if stream_error:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "".join(collected)[:2000], "chat_url": chat_url, "message": f"流式拨测失败: {stream_error}", "command": " ".join(shlex.quote(part) for part in cmd)}
+            if not collected:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
         finally:
             if proc.stdout:
                 proc.stdout.close()
@@ -793,7 +822,9 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
         }
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0, **_TEXT_DECODE_KWARGS
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
     latency_ms = (time.perf_counter() - t0) * 1000
