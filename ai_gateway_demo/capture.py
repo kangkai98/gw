@@ -38,16 +38,25 @@ def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: 
 def _parse_ready_pcap_in_process(
     pcap_path: Path, configs: list[dict], stop_event: threading.Event
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if "fork" not in multiprocessing.get_all_start_methods():
+    start_methods = multiprocessing.get_all_start_methods()
+    method = "forkserver" if "forkserver" in start_methods else "spawn" if "spawn" in start_methods else ""
+    if not method:
         with traffic_totals_lock:
             entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
             traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
         return entries, traffic_summary
 
-    ctx = multiprocessing.get_context("fork")
+    ctx = multiprocessing.get_context(method)
     result_queue = ctx.Queue(maxsize=1)
     proc = ctx.Process(target=_parse_ready_pcap_worker, args=(str(pcap_path), configs, result_queue), daemon=True)
-    proc.start()
+    try:
+        proc.start()
+    except Exception:
+        result_queue.close()
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
     try:
         while True:
             if stop_event.is_set():
@@ -1239,8 +1248,9 @@ def _canonical_flow_key(src: str, sport: int, dst: str, dport: int) -> str:
 def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket]) -> None:
     ordered = sorted(packets, key=lambda x: x.capture_seq)
     pcap_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = pcap_path.with_name(f".{pcap_path.name}.tmp")
     link_type = ordered[0].link_type if ordered else 1
-    writer = RawPcapWriter(str(pcap_path), linktype=link_type, sync=True)
+    writer = RawPcapWriter(str(temp_path), linktype=link_type, sync=False)
     writer.write_header(None)
     try:
         for cached in ordered:
@@ -1256,8 +1266,13 @@ def _write_cached_packets_to_pcap(pcap_path: Path, packets: list[CachedTcpPacket
                 caplen=cached.cap_len,
                 wirelen=cached.wire_len,
             )
-    finally:
+    except Exception:
         writer.close()
+        _delete_file(temp_path)
+        raise
+    else:
+        writer.close()
+        temp_path.replace(pcap_path)
 
 
 def _ready_pcap_path(output_dir: Path, observation_ts: float, source_path: Path) -> Path:
