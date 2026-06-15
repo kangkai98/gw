@@ -83,6 +83,64 @@ def _parse_ready_pcap_in_process(
     return entries, traffic_summary
 
 
+def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
+    try:
+        path = Path(pcap_path)
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(path, self_hosted_configs=configs)
+        result_queue.put(("ok", entries, traffic_summary))
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}", None))
+
+
+def _parse_ready_pcap_in_process(
+    pcap_path: Path, configs: list[dict], stop_event: threading.Event
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    start_methods = multiprocessing.get_all_start_methods()
+    method = "forkserver" if "forkserver" in start_methods else "spawn" if "spawn" in start_methods else ""
+    if not method:
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
+
+    ctx = multiprocessing.get_context(method)
+    result_queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(target=_parse_ready_pcap_worker, args=(str(pcap_path), configs, result_queue), daemon=True)
+    try:
+        proc.start()
+    except Exception:
+        result_queue.close()
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
+    try:
+        while True:
+            if stop_event.is_set():
+                proc.terminate()
+                proc.join(timeout=2)
+                raise RuntimeError("ready分析已因停止监听中断")
+            try:
+                status, entries, traffic_summary = result_queue.get(timeout=0.5)
+                break
+            except queue_module.Empty:
+                if not proc.is_alive():
+                    proc.join(timeout=0.5)
+                    raise RuntimeError(f"ready分析子进程异常退出：{proc.exitcode}")
+        proc.join(timeout=2)
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=2)
+        result_queue.close()
+
+    if status == "error":
+        raise RuntimeError(entries)
+    return entries, traffic_summary
+
+
 @dataclass
 class CachedTcpPacket:
     ts: float
@@ -714,11 +772,12 @@ class OnlineCaptureManager:
     def stop(self) -> dict[str, Any]:
         self._stop_event.set()
         proc = self._proc
-        if proc and proc.poll() is None:
+        capture_mode = self._status.capture_mode
+        if proc and proc.poll() is None and capture_mode != "windows":
             _terminate_process(proc)
         thread = self._thread
         if thread and thread.is_alive():
-            thread.join(timeout=5)
+            thread.join(timeout=8 if capture_mode == "windows" else 5)
         with self._lock:
             self._status.running = False
             self._status.message = "在线监听已停止"
