@@ -22,6 +22,65 @@ from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_total
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
+ONLINE_FILE_STABLE_SEC = 1.0
+
+
+def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
+    try:
+        path = Path(pcap_path)
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(path, self_hosted_configs=configs)
+        result_queue.put(("ok", entries, traffic_summary))
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}", None))
+
+
+def _parse_ready_pcap_in_process(
+    pcap_path: Path, configs: list[dict], stop_event: threading.Event
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    start_methods = multiprocessing.get_all_start_methods()
+    method = "forkserver" if "forkserver" in start_methods else "spawn" if "spawn" in start_methods else ""
+    if not method:
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
+
+    ctx = multiprocessing.get_context(method)
+    result_queue = ctx.Queue(maxsize=1)
+    proc = ctx.Process(target=_parse_ready_pcap_worker, args=(str(pcap_path), configs, result_queue), daemon=True)
+    try:
+        proc.start()
+    except Exception:
+        result_queue.close()
+        with traffic_totals_lock:
+            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
+            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
+        return entries, traffic_summary
+    try:
+        while True:
+            if stop_event.is_set():
+                proc.terminate()
+                proc.join(timeout=2)
+                raise RuntimeError("ready分析已因停止监听中断")
+            try:
+                status, entries, traffic_summary = result_queue.get(timeout=0.5)
+                break
+            except queue_module.Empty:
+                if not proc.is_alive():
+                    proc.join(timeout=0.5)
+                    raise RuntimeError(f"ready分析子进程异常退出：{proc.exitcode}")
+        proc.join(timeout=2)
+    finally:
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=2)
+        result_queue.close()
+
+    if status == "error":
+        raise RuntimeError(entries)
+    return entries, traffic_summary
 
 
 def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
@@ -737,6 +796,7 @@ class OnlineCaptureManager:
     ) -> None:
         processed_files: set[Path] = set()
         queued_files: set[Path] = set()
+        observed_online_files: dict[Path, tuple[int, float]] = {}
         pending_files: deque[Path] = deque()
         pending_lock = threading.Lock()
         pending_event = threading.Event()
@@ -761,17 +821,39 @@ class OnlineCaptureManager:
                 ready_event.set()
 
         def _enqueue_rotated_files(finalize: bool) -> None:
-            files = sorted(self.output_dir.glob("online*.pcap"), key=lambda p: p.name)
-            candidates = files if finalize else files[:-1]
+            online_stats: list[tuple[Path, int, float]] = []
+            for file_path in self.output_dir.glob("online*.pcap"):
+                if not file_path.exists():
+                    continue
+                try:
+                    stat = file_path.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime + 1e-6 < self._run_started_at:
+                    continue
+                online_stats.append((file_path, stat.st_size, stat.st_mtime))
+
+            latest_online = None
+            if online_stats and not finalize:
+                latest_online = max(online_stats, key=lambda item: (item[2], item[0].name))[0]
+
+            now = time.time()
             with pending_lock:
-                for file_path in candidates:
-                    if file_path in processed_files or file_path in queued_files or not file_path.exists():
+                for file_path, size, mtime in sorted(online_stats, key=lambda item: (item[2], item[0].name)):
+                    if file_path in processed_files or file_path in queued_files:
                         continue
-                    try:
-                        if file_path.stat().st_mtime + 1e-6 < self._run_started_at:
+                    if not finalize:
+                        previous = observed_online_files.get(file_path)
+                        observed_online_files[file_path] = (size, mtime)
+                        # dumpcap/tshark/tcpdump can keep the just-rotated file handle open briefly,
+                        # especially on Windows.  Do not let the analyzer open a file until it is no
+                        # longer the newest online file and its size/mtime stayed stable for one scan.
+                        if (
+                            file_path == latest_online
+                            or previous != (size, mtime)
+                            or now - mtime < ONLINE_FILE_STABLE_SEC
+                        ):
                             continue
-                    except OSError:
-                        continue
                     pending_files.append(file_path)
                     queued_files.add(file_path)
                     with self._lock:
