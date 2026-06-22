@@ -744,6 +744,12 @@ def _probe_headers(api_key: str) -> dict[str, str]:
     return headers
 
 
+def _probe_ssl_context() -> ssl.SSLContext:
+    # Match `curl -k` for probe traffic: allow enterprise TLS interception or
+    # self-signed LLM endpoints without failing certificate verification.
+    return ssl._create_unverified_context()
+
+
 def _run_llm_probe_via_python_http(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     headers = _probe_headers(api_key)
@@ -907,7 +913,7 @@ def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_se
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     conn: http.client.HTTPConnection | http.client.HTTPSConnection
     if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context())
     else:
         conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
     start = time.perf_counter()
@@ -933,7 +939,7 @@ def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], ti
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     conn: http.client.HTTPConnection | http.client.HTTPSConnection
     if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context())
     else:
         conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
 

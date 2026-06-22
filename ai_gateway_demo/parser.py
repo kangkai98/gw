@@ -48,115 +48,6 @@ SEGMENT_MERGE_GAP_SEC = 2.0
 GO_LEN_MAX = 200
 
 
-@dataclass(frozen=True)
-class ParserConfig:
-    token_log_enable: bool = TOKEN_LOG_ENABLE
-    min_go_run: int = MIN_GO_RUN
-    min_roundtrips: int = MIN_ROUNDTRIPS
-    return_sum_max: int = RETURN_SUM_MAX
-    allow_bad_ret_bursts: int = ALLOW_BAD_RET_BURSTS
-    segment_merge_gap_sec: float = SEGMENT_MERGE_GAP_SEC
-    go_len_max: int = GO_LEN_MAX
-
-
-_PARSER_CONFIG_LOCK = threading.Lock()
-_PARSER_CONFIG_CACHE: ParserConfig | None = None
-_PARSER_CONFIG_MTIME: float | None = None
-
-
-def _coerce_bool(value: object, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
-
-
-def _coerce_int(value: object, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _coerce_float(value: object, default: float) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _parser_config_path() -> Path:
-    return Path(os.getenv("AI_GATEWAY_PARSER_CONFIG", PARSER_CONFIG_PATH))
-
-
-def _default_parser_config_dict() -> dict[str, object]:
-    return {
-        "token_log_enable": TOKEN_LOG_ENABLE,
-        "min_go_run": MIN_GO_RUN,
-        "min_roundtrips": MIN_ROUNDTRIPS,
-        "return_sum_max": RETURN_SUM_MAX,
-        "allow_bad_ret_bursts": ALLOW_BAD_RET_BURSTS,
-        "segment_merge_gap_sec": SEGMENT_MERGE_GAP_SEC,
-        "go_len_max": GO_LEN_MAX,
-    }
-
-
-def _ensure_parser_config_file(path: Path) -> None:
-    if path.exists():
-        return
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(_default_parser_config_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        # The executable may run from a read-only directory.  In that case keep
-        # using defaults/environment variables instead of failing parsing.
-        return
-
-
-def _load_parser_config(path: Path) -> ParserConfig:
-    _ensure_parser_config_file(path)
-    raw: dict[str, object] = {}
-    try:
-        if path.exists():
-            raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raw = {}
-
-    return ParserConfig(
-        token_log_enable=_coerce_bool(
-            os.getenv("AI_GATEWAY_TOKEN_LOG_ENABLE", raw.get("token_log_enable")),
-            TOKEN_LOG_ENABLE,
-        ),
-        min_go_run=max(1, _coerce_int(raw.get("min_go_run"), MIN_GO_RUN)),
-        min_roundtrips=max(1, _coerce_int(raw.get("min_roundtrips"), MIN_ROUNDTRIPS)),
-        return_sum_max=max(0, _coerce_int(raw.get("return_sum_max"), RETURN_SUM_MAX)),
-        allow_bad_ret_bursts=max(0, _coerce_int(raw.get("allow_bad_ret_bursts"), ALLOW_BAD_RET_BURSTS)),
-        segment_merge_gap_sec=max(0.0, _coerce_float(raw.get("segment_merge_gap_sec"), SEGMENT_MERGE_GAP_SEC)),
-        go_len_max=max(1, _coerce_int(raw.get("go_len_max"), GO_LEN_MAX)),
-    )
-
-
-def get_parser_config() -> ParserConfig:
-    path = _parser_config_path()
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        mtime = None
-    with _PARSER_CONFIG_LOCK:
-        global _PARSER_CONFIG_CACHE, _PARSER_CONFIG_MTIME
-        if _PARSER_CONFIG_CACHE is None or _PARSER_CONFIG_MTIME != mtime:
-            _PARSER_CONFIG_CACHE = _load_parser_config(path)
-            try:
-                _PARSER_CONFIG_MTIME = path.stat().st_mtime
-            except OSError:
-                _PARSER_CONFIG_MTIME = None
-        return _PARSER_CONFIG_CACHE
-
-
 @dataclass
 class PacketMeta:
     ts: float
@@ -1063,7 +954,6 @@ def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | No
 
 
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
-    config = get_parser_config()
     totals.update({
         "uplink_total_bytes": 0,
         "downlink_total_bytes": 0,
