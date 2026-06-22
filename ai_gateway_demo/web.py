@@ -791,7 +791,21 @@ def _curl_probe_needs_python_fallback(result: dict[str, Any]) -> bool:
     if result.get("ok"):
         return False
     message = str(result.get("message") or "")
-    return "No such file" in message or "找不到" in message or "执行失败" in message
+    lowered = message.lower()
+    curl_transport_failures = (
+        "no such file",
+        "找不到",
+        "执行失败",
+        "curl:",
+        "failed to connect",
+        "could not connect",
+        "connection timed out",
+        "operation timed out",
+        "connection refused",
+        "ssl certificate problem",
+        "schannel",
+    )
+    return any(pattern in lowered or pattern in message for pattern in curl_transport_failures)
 
 def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
     headers = ["-H", "Content-Type: application/json"]
