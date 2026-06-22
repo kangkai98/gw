@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -12,8 +13,12 @@ from typing import Iterable
 from scapy.all import IP, TCP, Raw, rdpcap
 from scapy.utils import RawPcapReader
 
+# Runtime-tunable parser settings. Defaults are kept here, but effective
+# values are loaded from config/parser_config.json (or AI_GATEWAY_PARSER_CONFIG)
+# so Nuitka/PyInstaller builds can be tuned without rebuilding.
 TOKEN_LOG_ENABLE = True
 TOKEN_LOG_PATH = os.path.join("uploads", "token_calc.log")
+PARSER_CONFIG_PATH = os.path.join("config", "parser_config.json")
 
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
@@ -43,6 +48,114 @@ SEGMENT_MERGE_GAP_SEC = 2.0
 GO_LEN_MAX = 200
 
 
+@dataclass(frozen=True)
+class ParserConfig:
+    token_log_enable: bool = TOKEN_LOG_ENABLE
+    min_go_run: int = MIN_GO_RUN
+    min_roundtrips: int = MIN_ROUNDTRIPS
+    return_sum_max: int = RETURN_SUM_MAX
+    allow_bad_ret_bursts: int = ALLOW_BAD_RET_BURSTS
+    segment_merge_gap_sec: float = SEGMENT_MERGE_GAP_SEC
+    go_len_max: int = GO_LEN_MAX
+
+
+_PARSER_CONFIG_LOCK = threading.Lock()
+_PARSER_CONFIG_CACHE: ParserConfig | None = None
+_PARSER_CONFIG_MTIME: float | None = None
+
+
+def _coerce_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def _coerce_int(value: object, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: object, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parser_config_path() -> Path:
+    return Path(os.getenv("AI_GATEWAY_PARSER_CONFIG", PARSER_CONFIG_PATH))
+
+
+def _default_parser_config_dict() -> dict[str, object]:
+    return {
+        "token_log_enable": TOKEN_LOG_ENABLE,
+        "min_go_run": MIN_GO_RUN,
+        "min_roundtrips": MIN_ROUNDTRIPS,
+        "return_sum_max": RETURN_SUM_MAX,
+        "allow_bad_ret_bursts": ALLOW_BAD_RET_BURSTS,
+        "segment_merge_gap_sec": SEGMENT_MERGE_GAP_SEC,
+        "go_len_max": GO_LEN_MAX,
+    }
+
+
+def _ensure_parser_config_file(path: Path) -> None:
+    if path.exists():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(_default_parser_config_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        # The executable may run from a read-only directory.  In that case keep
+        # using defaults/environment variables instead of failing parsing.
+        return
+
+
+def _load_parser_config(path: Path) -> ParserConfig:
+    _ensure_parser_config_file(path)
+    raw: dict[str, object] = {}
+    try:
+        if path.exists():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raw = {}
+
+    return ParserConfig(
+        token_log_enable=_coerce_bool(
+            os.getenv("AI_GATEWAY_TOKEN_LOG_ENABLE", raw.get("token_log_enable")),
+            TOKEN_LOG_ENABLE,
+        ),
+        min_go_run=max(1, _coerce_int(raw.get("min_go_run"), MIN_GO_RUN)),
+        min_roundtrips=max(1, _coerce_int(raw.get("min_roundtrips"), MIN_ROUNDTRIPS)),
+        return_sum_max=max(0, _coerce_int(raw.get("return_sum_max"), RETURN_SUM_MAX)),
+        allow_bad_ret_bursts=max(0, _coerce_int(raw.get("allow_bad_ret_bursts"), ALLOW_BAD_RET_BURSTS)),
+        segment_merge_gap_sec=max(0.0, _coerce_float(raw.get("segment_merge_gap_sec"), SEGMENT_MERGE_GAP_SEC)),
+        go_len_max=max(1, _coerce_int(raw.get("go_len_max"), GO_LEN_MAX)),
+    )
+
+
+def get_parser_config() -> ParserConfig:
+    path = _parser_config_path()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        mtime = None
+    with _PARSER_CONFIG_LOCK:
+        global _PARSER_CONFIG_CACHE, _PARSER_CONFIG_MTIME
+        if _PARSER_CONFIG_CACHE is None or _PARSER_CONFIG_MTIME != mtime:
+            _PARSER_CONFIG_CACHE = _load_parser_config(path)
+            try:
+                _PARSER_CONFIG_MTIME = path.stat().st_mtime
+            except OSError:
+                _PARSER_CONFIG_MTIME = None
+        return _PARSER_CONFIG_CACHE
+
 
 @dataclass
 class PacketMeta:
@@ -59,7 +172,8 @@ class PacketMeta:
 
 
 def _append_token_log(line: str) -> None:
-    if not TOKEN_LOG_ENABLE:
+    config = get_parser_config()
+    if not config.token_log_enable:
         return
     try:
         os.makedirs(os.path.dirname(TOKEN_LOG_PATH), exist_ok=True)
@@ -472,6 +586,7 @@ def _streaming_score(flow_items: list[PacketMeta], client_ip: str) -> float:
 
 
 def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[str, int, str, int] | None]:
+    config = get_parser_config()
     ordered = sorted(flow_items, key=lambda p: p.ts)
     go_tuple = _wsw_find_go_tuple(ordered)
     if not go_tuple:
@@ -499,7 +614,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
                     self.first_go_len = pkt_len
                 elif pkt_len != self.first_go_len:
                     self.go_len_all_same = False
-                if pkt_len >= GO_LEN_MAX:
+                if pkt_len >= config.go_len_max:
                     self.has_oversize_go = True
 
     runs: list[_Run] = []
@@ -530,7 +645,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
             and (not r.has_oversize_go)
             and r.go_len_all_same
             and (r.first_go_len is not None)
-            and (r.first_go_len < GO_LEN_MAX)
+            and (r.first_go_len < config.go_len_max)
         )
 
     hit_segments = 0
@@ -540,7 +655,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
     def _finalize_segment() -> None:
         nonlocal hit_segments, in_seg, seg_intervals, seg_go_packets
-        if in_seg and seg_go_packets >= MIN_GO_RUN and seg_intervals >= MIN_ROUNDTRIPS:
+        if in_seg and seg_go_packets >= config.min_go_run and seg_intervals >= config.min_roundtrips:
             hit_segments += 1
         in_seg = False
         seg_intervals = 0
@@ -578,15 +693,15 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
         if in_seg and last_good_end_ts is not None:
             gap_no_ret = float(left.pkts[0].ts) - float(last_good_end_ts)
-            if gap_no_ret > SEGMENT_MERGE_GAP_SEC:
+            if gap_no_ret > config.segment_merge_gap_sec:
                 _finalize_segment()
                 bad_streak = 0
                 last_good_end_ts = None
 
-        if mid.sum_len > RETURN_SUM_MAX:
+        if mid.sum_len > config.return_sum_max:
             if in_seg:
                 bad_streak += 1
-                if bad_streak > ALLOW_BAD_RET_BURSTS:
+                if bad_streak > config.allow_bad_ret_bursts:
                     _finalize_segment()
                     bad_streak = 0
                     last_good_end_ts = None
@@ -607,6 +722,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
 
 def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[PacketMeta]], tuple[str, int, str, int] | None]:
+    config = get_parser_config()
     ordered = sorted(flow_items, key=lambda p: p.ts)
     go_tuple = _wsw_find_go_tuple(ordered)
     if not go_tuple:
@@ -634,7 +750,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
                     self.first_go_len = pkt_len
                 elif pkt_len != self.first_go_len:
                     self.go_len_all_same = False
-                if pkt_len >= GO_LEN_MAX:
+                if pkt_len >= config.go_len_max:
                     self.has_oversize_go = True
 
     runs: list[_Run] = []
@@ -662,7 +778,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
             and (not r.has_oversize_go)
             and r.go_len_all_same
             and (r.first_go_len is not None)
-            and (r.first_go_len < GO_LEN_MAX)
+            and (r.first_go_len < config.go_len_max)
         )
 
     segments: list[list[PacketMeta]] = []
@@ -674,7 +790,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
 
     def _finalize() -> None:
         nonlocal in_seg, seg_start_run, seg_end_run, seg_intervals, seg_go_packets
-        if in_seg and seg_go_packets >= MIN_GO_RUN and seg_intervals >= MIN_ROUNDTRIPS:
+        if in_seg and seg_go_packets >= config.min_go_run and seg_intervals >= config.min_roundtrips:
             pkts: list[PacketMeta] = []
             for r in runs[seg_start_run : seg_end_run + 1]:
                 pkts.extend(r.pkts)
@@ -717,15 +833,15 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
 
         if in_seg and last_good_end_ts is not None:
             gap_no_ret = float(left.pkts[0].ts) - float(last_good_end_ts)
-            if gap_no_ret > SEGMENT_MERGE_GAP_SEC:
+            if gap_no_ret > config.segment_merge_gap_sec:
                 _finalize()
                 bad_streak = 0
                 last_good_end_ts = None
 
-        if mid.sum_len > RETURN_SUM_MAX:
+        if mid.sum_len > config.return_sum_max:
             if in_seg:
                 bad_streak += 1
-                if bad_streak > ALLOW_BAD_RET_BURSTS:
+                if bad_streak > config.allow_bad_ret_bursts:
                     _finalize()
                     bad_streak = 0
                     last_good_end_ts = None
@@ -947,6 +1063,7 @@ def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | No
 
 
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+    config = get_parser_config()
     totals.update({
         "uplink_total_bytes": 0,
         "downlink_total_bytes": 0,
@@ -968,7 +1085,7 @@ def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> l
     for flow_key, flow_packets, go_tuple in picked:
         segments, go_tuple2 = _wsw_extract_hit_segments(flow_packets)
         go_use = go_tuple2 or go_tuple
-        segments = _merge_adjacent_segments_by_gap(segments, flow_packets, gap_sec=SEGMENT_MERGE_GAP_SEC)
+        segments = _merge_adjacent_segments_by_gap(segments, flow_packets, gap_sec=config.segment_merge_gap_sec)
 
         client_ip, server_ip = infer_direction(flow_packets, go_tuple=go_use)
         server_endpoint = _infer_server_endpoint(flow_packets, client_ip, server_ip, go_use)

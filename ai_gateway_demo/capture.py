@@ -23,64 +23,7 @@ from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_total
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
 ONLINE_FILE_STABLE_SEC = 1.0
-
-
-def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
-    try:
-        path = Path(pcap_path)
-        with traffic_totals_lock:
-            entries = parse_pcap_to_entries(path, self_hosted_configs=configs)
-            traffic_summary = summarize_pcap_traffic(path, self_hosted_configs=configs)
-        result_queue.put(("ok", entries, traffic_summary))
-    except BaseException as exc:
-        result_queue.put(("error", f"{type(exc).__name__}: {exc}", None))
-
-
-def _parse_ready_pcap_in_process(
-    pcap_path: Path, configs: list[dict], stop_event: threading.Event
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    start_methods = multiprocessing.get_all_start_methods()
-    method = "forkserver" if "forkserver" in start_methods else "spawn" if "spawn" in start_methods else ""
-    if not method:
-        with traffic_totals_lock:
-            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
-            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
-        return entries, traffic_summary
-
-    ctx = multiprocessing.get_context(method)
-    result_queue = ctx.Queue(maxsize=1)
-    proc = ctx.Process(target=_parse_ready_pcap_worker, args=(str(pcap_path), configs, result_queue), daemon=True)
-    try:
-        proc.start()
-    except Exception:
-        result_queue.close()
-        with traffic_totals_lock:
-            entries = parse_pcap_to_entries(pcap_path, self_hosted_configs=configs)
-            traffic_summary = summarize_pcap_traffic(pcap_path, self_hosted_configs=configs)
-        return entries, traffic_summary
-    try:
-        while True:
-            if stop_event.is_set():
-                proc.terminate()
-                proc.join(timeout=2)
-                raise RuntimeError("ready分析已因停止监听中断")
-            try:
-                status, entries, traffic_summary = result_queue.get(timeout=0.5)
-                break
-            except queue_module.Empty:
-                if not proc.is_alive():
-                    proc.join(timeout=0.5)
-                    raise RuntimeError(f"ready分析子进程异常退出：{proc.exitcode}")
-        proc.join(timeout=2)
-    finally:
-        if proc.is_alive():
-            proc.terminate()
-            proc.join(timeout=2)
-        result_queue.close()
-
-    if status == "error":
-        raise RuntimeError(entries)
-    return entries, traffic_summary
+ONLINE_STALL_MIN_BYTES = 4096
 
 
 def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
@@ -808,6 +751,20 @@ class OnlineCaptureManager:
         ready_event = threading.Event()
         ready_done = threading.Event()
 
+        def _latest_online_stat() -> tuple[Path, int, float] | None:
+            latest: tuple[Path, int, float] | None = None
+            for file_path in self.output_dir.glob("online*.pcap"):
+                try:
+                    stat = file_path.stat()
+                except OSError:
+                    continue
+                if stat.st_mtime + 1e-6 < self._run_started_at:
+                    continue
+                item = (file_path, stat.st_size, stat.st_mtime)
+                if latest is None or (item[2], item[0].name) > (latest[2], latest[0].name):
+                    latest = item
+            return latest
+
         def _enqueue_ready_file(ready_pcap: Path | None) -> None:
             if ready_pcap is None:
                 return
@@ -927,9 +884,36 @@ class OnlineCaptureManager:
         ready_analyzer.start()
         proc = self._start_continuous_capture(interface, interval_sec, bpf_filter, mode=mode)
         self._proc = proc
+        latest_seen_path: Path | None = None
+        latest_seen_size = -1
+        latest_seen_changed_at = time.monotonic()
+        stall_restart_after_sec = max(5.0, min(float(interval_sec), 10.0))
         try:
             while not self._stop_event.is_set():
                 _enqueue_rotated_files(finalize=False)
+                latest_stat = _latest_online_stat()
+                if latest_stat is not None:
+                    latest_path, latest_size, _ = latest_stat
+                    if latest_path != latest_seen_path or latest_size != latest_seen_size:
+                        latest_seen_path = latest_path
+                        latest_seen_size = latest_size
+                        latest_seen_changed_at = time.monotonic()
+                    elif (
+                        latest_size <= ONLINE_STALL_MIN_BYTES
+                        and self._status.total_online_files > 0
+                        and time.monotonic() - latest_seen_changed_at >= stall_restart_after_sec
+                        and proc.poll() is None
+                    ):
+                        _terminate_process(proc)
+                        _enqueue_rotated_files(finalize=False)
+                        proc = self._start_continuous_capture(interface, interval_sec, bpf_filter, mode=mode)
+                        self._proc = proc
+                        latest_seen_path = None
+                        latest_seen_size = -1
+                        latest_seen_changed_at = time.monotonic()
+                        with self._lock:
+                            self._status.message = "检测到online文件停止增长，已自动重启抓包进程"
+                        continue
                 if proc.poll() is not None:
                     proc.communicate(timeout=5)
                     if proc.returncode not in (0, -15, -2, 143, 130, 1):

@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import shlex
+import shutil
 import json
 import ssl
 import time
@@ -735,6 +736,57 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
 
 
 
+
+def _probe_headers(api_key: str) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    return headers
+
+
+def _run_llm_probe_via_python_http(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    headers = _probe_headers(api_key)
+    try:
+        if stream_mode:
+            probe = _http_post_stream_probe(chat_url, payload, headers, timeout_value)
+            status_code = probe.get("status_code")
+            response_text = str(probe.get("response_text") or "")
+            latency_ms = float(probe.get("latency_ms") or 0.0)
+            if status_code and int(status_code) >= 400:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: HTTP {status_code}", "probe_transport": "python_http"}
+            if not response_text:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "probe_transport": "python_http"}
+            return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": response_text, "chat_url": chat_url, "message": "流式拨测完成", "probe_transport": "python_http"}
+
+        status_code, raw, latency_ms = _http_post_json(chat_url, payload, headers, timeout_value)
+        text = raw.decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 返回内容不是JSON", "probe_transport": "python_http"}
+        choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+        message = choice.get("message") if isinstance(choice, dict) else {}
+        short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "probe_transport": "python_http"}
+        if status_code >= 400:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: HTTP {status_code}", "probe_transport": "python_http"}
+        if not short_text:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 未返回有效内容", "probe_transport": "python_http"}
+        return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "probe_transport": "python_http"}
+    except (TimeoutError, socket.timeout):
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测超时({timeout_value:.0f}s)", "chat_url": chat_url, "probe_transport": "python_http"}
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测异常: {exc}", "chat_url": chat_url, "probe_transport": "python_http"}
+
+
+def _curl_probe_needs_python_fallback(result: dict[str, Any]) -> bool:
+    if result.get("ok"):
+        return False
+    message = str(result.get("message") or "")
+    return "No such file" in message or "找不到" in message or "执行失败" in message
+
 def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
     headers = ["-H", "Content-Type: application/json"]
     if api_key.strip():
@@ -956,7 +1008,15 @@ def _run_llm_probe(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": stream_mode,
     }
-    return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
+    if shutil.which("curl"):
+        curl_result = _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
+        curl_result.setdefault("probe_transport", "curl")
+        if curl_result.get("ok") or not _curl_probe_needs_python_fallback(curl_result):
+            return curl_result
+        fallback = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
+        fallback["message"] = f"curl不可用，已使用Python HTTP备选路径: {fallback.get('message') or ''}"
+        return fallback
+    return _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
 
 
 @app.post("/api/probe/llm")
@@ -977,9 +1037,17 @@ def api_probe_llm(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": (mode or "standard").strip() == "stream",
     }
-    rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(_to_chat_completions_url(target), api_key, payload)
-    result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
-    result["chat_url"] = _to_chat_completions_url(target)
+    chat_url = _to_chat_completions_url(target)
+    rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(chat_url, api_key, payload)
+    if shutil.which("curl"):
+        result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
+        result.setdefault("probe_transport", "curl")
+        if _curl_probe_needs_python_fallback(result):
+            result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+            result["message"] = f"curl不可用，已使用Python HTTP备选路径: {result.get('message') or ''}"
+    else:
+        result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+    result["chat_url"] = chat_url
     result["final_curl"] = rendered_curl
     if trigger:
         _add_probe_record(
