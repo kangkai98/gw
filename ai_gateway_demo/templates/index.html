@@ -1091,7 +1091,6 @@
         ];
         if (mode === 'stream') {
           lines.push(`TTFB(ms): ${num1(data.ttfb_ms)}`);
-          lines.push(`TTFT(ms): ${num1(data.ttft_ms)}`);
         }
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);

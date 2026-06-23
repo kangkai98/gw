@@ -919,8 +919,7 @@ class OnlineCaptureManager:
                     if proc.returncode not in (0, -15, -2, 143, 130, 1):
                         tool_name = "dumpcap/tshark" if mode == "windows" else "tcpdump"
                         raise RuntimeError(
-                            f"{tool_name} 退出码 {proc.returncode}，"
-                            f"详情请查看 {self.output_dir / 'capture_subprocess.log'}"
+                            f"{tool_name} 退出码 {proc.returncode}"
                         )
                     break
                 with self._lock:
@@ -951,11 +950,18 @@ class OnlineCaptureManager:
             ready_done.set()
             ready_event.set()
             ready_analyzer.join(timeout=1)
+            stop_deleted_pcaps = 0
+            if pcap_retention_sec == 0:
+                stop_deleted_pcaps = _delete_ready_pcaps(self.output_dir)
             self._proc = None
 
         with self._lock:
             self._status.running = False
             self._status.current_file = None
+            if stop_deleted_pcaps:
+                self._status.last_deleted_pcaps = stop_deleted_pcaps
+                self._status.total_deleted_pcaps += stop_deleted_pcaps
+                self._status.pending_ready_files = 0
             if self._status.message.startswith("正在采集"):
                 self._status.message = "在线监听已停止"
 
@@ -1005,7 +1011,7 @@ class OnlineCaptureManager:
             cmd = ["tcpdump", "-i", interface, "-s", "0", "-G", str(interval_sec), "-w", str(pattern)]
             if bpf_filter:
                 cmd.extend(shlex.split(bpf_filter))
-        return _start_capture_process(cmd, self.output_dir / "capture_subprocess.log")
+        return _start_capture_process(cmd)
 
     def _process_rotated_file(
         self, file_path: Path, idle_timeout_sec: int, max_flow_duration_sec: int, pcap_retention_sec: int
@@ -1388,6 +1394,15 @@ def _ready_pcap_path(output_dir: Path, observation_ts: float, source_path: Path)
         suffix += 1
 
 
+def _delete_ready_pcaps(output_dir: Path) -> int:
+    deleted = 0
+    for pattern in ("ready_*.pcap", ".ready_*.pcap.tmp"):
+        for path in output_dir.glob(pattern):
+            if _delete_file(path):
+                deleted += 1
+    return deleted
+
+
 def _cleanup_expired_pcaps(output_dir: Path, retention_sec: int, keep_latest_online: bool = False) -> int:
     if retention_sec <= 0:
         return 0
@@ -1416,10 +1431,8 @@ def _delete_file(path: Path) -> bool:
         return False
 
 
-def _start_capture_process(cmd: list[str], log_path: Path) -> subprocess.Popen[bytes]:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as log_file:
-        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
+def _start_capture_process(cmd: list[str]) -> subprocess.Popen[bytes]:
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _terminate_process(proc: subprocess.Popen[bytes]) -> None:
