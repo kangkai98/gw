@@ -1083,6 +1083,8 @@
         const mode = String(fd.get('mode') || 'standard');
         const lines = [
           `触发方式: ${trigger}`,
+          `传输方式: ${data.probe_transport || '-'}`,
+          `传输模式: ${data.probe_transport_mode || '-'}`,
           `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
           `状态码: ${data.status_code ?? '-'}`,
           `Latency(ms): ${num1(data.latency_ms)}`,

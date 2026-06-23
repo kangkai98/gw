@@ -81,6 +81,14 @@ _follow_probe_tasks: dict[int, FollowProbeTask] = {}
 _next_follow_probe_task_id = 1
 DEFAULT_HEALTH_CFG = {"ttft_alert": 3500.0, "tpot_alert": 180.0}
 _TEXT_DECODE_KWARGS = {"encoding": "utf-8", "errors": "ignore"}
+_PROBE_TRANSPORT_MODE_ENV = "AI_GATEWAY_PROBE_TRANSPORT"
+
+
+def _probe_transport_mode() -> str:
+    mode = os.getenv(_PROBE_TRANSPORT_MODE_ENV, "httpx").strip().lower()
+    if mode in {"curl", "auto", "httpx", "python", "python_http"}:
+        return mode
+    return "httpx"
 
 
 def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
@@ -1149,6 +1157,11 @@ def _run_llm_probe(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": stream_mode,
     }
+    transport_mode = _probe_transport_mode()
+    if transport_mode in {"httpx", "python", "python_http"}:
+        return _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
+    if transport_mode == "curl":
+        return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
     if shutil.which("curl"):
         curl_result = _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
         curl_result.setdefault("probe_transport", "curl")
@@ -1180,7 +1193,13 @@ def api_probe_llm(
     }
     chat_url = _to_chat_completions_url(target)
     rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(chat_url, api_key, payload)
-    if shutil.which("curl"):
+    transport_mode = _probe_transport_mode()
+    if transport_mode in {"httpx", "python", "python_http"}:
+        result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+    elif transport_mode == "curl":
+        result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
+        result.setdefault("probe_transport", "curl")
+    elif shutil.which("curl"):
         result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
         result.setdefault("probe_transport", "curl")
         if _curl_probe_needs_python_fallback(result):
@@ -1188,6 +1207,7 @@ def api_probe_llm(
             result["message"] = f"curl不可用，已使用Python HTTP备选路径: {result.get('message') or ''}"
     else:
         result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+    result["probe_transport_mode"] = transport_mode
     result["chat_url"] = chat_url
     result["final_curl"] = rendered_curl
     if trigger:
