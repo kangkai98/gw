@@ -53,6 +53,7 @@ body {
 .stat { padding: 19px 22px; min-height: 124px; display: flex; flex-direction: column; justify-content: center; }
 .stat h3 { margin: 0; font-size: 13px; color: var(--muted); font-weight: 520; }
 .stat p { margin: 10px 0 4px; font-size: 34px; font-weight: 650; letter-spacing: -0.02em; }
+.stat p.estimated-token-value { color: #7b8496; }
 .stat small { color: #7b88a0; font-size: 12px; }
 
 .panel { padding: 20px; margin-bottom: 14px; }
