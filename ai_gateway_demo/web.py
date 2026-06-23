@@ -13,7 +13,8 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+import urllib.request
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -914,8 +915,33 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     if isinstance(parsed, dict) and parsed.get("error"):
         return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "command": " ".join(shlex.quote(part) for part in cmd)}
     return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
-def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
-    parsed = urlparse(url)
+
+def _proxy_auth_headers(proxy) -> dict[str, str]:
+    if not proxy.username:
+        return {}
+    import base64
+
+    user = unquote(proxy.username)
+    password = unquote(proxy.password or "")
+    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    return {"Proxy-Authorization": f"Basic {token}"}
+
+
+def _probe_proxy_for(parsed) -> object | None:
+    host = parsed.hostname or ""
+    if not host or urllib.request.proxy_bypass(host):
+        return None
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get(parsed.scheme) or proxies.get(parsed.scheme.lower()) or proxies.get("all")
+    if not proxy_url:
+        return None
+    if "://" not in proxy_url:
+        proxy_url = f"http://{proxy_url}"
+    proxy = urlparse(proxy_url)
+    return proxy if proxy.hostname else None
+
+
+def _open_probe_connection(parsed, timeout_sec: float) -> tuple[http.client.HTTPConnection | http.client.HTTPSConnection, str, dict[str, str]]:
     scheme = parsed.scheme or "http"
     host = parsed.hostname or ""
     if not host:
@@ -924,14 +950,38 @@ def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_se
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    proxy = _probe_proxy_for(parsed)
+    extra_headers: dict[str, str] = {}
     if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context())
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+        if proxy:
+            proxy_port = proxy.port or (443 if proxy.scheme == "https" else 8080)
+            if proxy.scheme == "https":
+                conn: http.client.HTTPConnection | http.client.HTTPSConnection = http.client.HTTPSConnection(proxy.hostname, proxy_port, timeout=timeout_sec, context=_probe_ssl_context())
+            else:
+                conn = http.client.HTTPConnection(proxy.hostname, proxy_port, timeout=timeout_sec)
+            conn.set_tunnel(host, port, headers=_proxy_auth_headers(proxy))
+            return conn, path, extra_headers
+        return http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context()), path, extra_headers
+
+    if proxy:
+        proxy_port = proxy.port or (443 if proxy.scheme == "https" else 8080)
+        if proxy.scheme == "https":
+            conn = http.client.HTTPSConnection(proxy.hostname, proxy_port, timeout=timeout_sec, context=_probe_ssl_context())
+        else:
+            conn = http.client.HTTPConnection(proxy.hostname, proxy_port, timeout=timeout_sec)
+        extra_headers.update(_proxy_auth_headers(proxy))
+        return conn, parsed.geturl(), extra_headers
+    return http.client.HTTPConnection(host, port, timeout=timeout_sec), path, extra_headers
+
+
+def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
+    parsed = urlparse(url)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    conn, path, extra_headers = _open_probe_connection(parsed, timeout_sec)
+    request_headers = dict(headers)
+    request_headers.update(extra_headers)
     start = time.perf_counter()
-    conn.request("POST", path, body=body, headers=headers)
+    conn.request("POST", path, body=body, headers=request_headers)
     resp = conn.getresponse()
     raw = resp.read()
     latency_ms = (time.perf_counter() - start) * 1000
@@ -942,23 +992,13 @@ def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_se
 
 def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> dict:
     parsed = urlparse(url)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or ""
-    if not host:
-        raise ValueError("URL 缺少主机地址")
-    port = parsed.port or (443 if scheme == "https" else 80)
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    conn: http.client.HTTPConnection | http.client.HTTPSConnection
-    if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context())
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+    conn, path, extra_headers = _open_probe_connection(parsed, timeout_sec)
+    request_headers = dict(headers)
+    request_headers.update(extra_headers)
 
     t0 = time.perf_counter()
-    conn.request("POST", path, body=body, headers=headers)
+    conn.request("POST", path, body=body, headers=request_headers)
     resp = conn.getresponse()
     status = int(resp.status or 0)
     ttfb_ms: float | None = None
