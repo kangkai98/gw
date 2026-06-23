@@ -102,7 +102,7 @@ class CaptureStatus:
     interface: str = ""
     interval_sec: int = 15
     idle_timeout_sec: int = 15
-    max_flow_duration_sec: int = 120
+    max_flow_duration_sec: int = 90
     pcap_retention_sec: int = 0
     bpf_filter: str = "tcp"
     capture_mode: str = "linux"
@@ -166,7 +166,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -185,7 +185,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -262,7 +262,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -338,7 +338,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -414,7 +414,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -490,7 +490,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -566,7 +566,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -642,7 +642,7 @@ class OnlineCaptureManager:
         interval_sec: int = 15,
         bpf_filter: str = "tcp",
         idle_timeout_sec: int = 15,
-        max_flow_duration_sec: int = 120,
+        max_flow_duration_sec: int = 90,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(

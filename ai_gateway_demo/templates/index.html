@@ -146,7 +146,7 @@
           </label>
           <label>
             <div class="subtle">单流最长缓存（秒）</div>
-            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="120" placeholder="最长缓存(秒,0不限)" required />
+            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="90" placeholder="最长缓存(秒,0不限)" required />
           </label>
           <label>
             <div class="subtle">pcap保留时长（秒）</div>
@@ -893,7 +893,7 @@
       const state = capture?.running ? '运行中' : '已停止';
       const lines = [
         `状态：${state}；${capture?.message || '未启动在线监听'}`,
-        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 15}s；idle：${capture?.idle_timeout_sec || 15}s；最长缓存：${capture?.max_flow_duration_sec ?? 120}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 15}s；idle：${capture?.idle_timeout_sec || 15}s；最长缓存：${capture?.max_flow_duration_sec ?? 90}s；过滤：${capture?.bpf_filter || 'tcp'}`,
         `pcap保留：${capture?.pcap_retention_sec ?? 0}s；最近清理：${capture?.last_deleted_pcaps ?? 0} 个；累计清理：${capture?.total_deleted_pcaps ?? 0} 个`,
         `缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包；就绪流：${capture?.last_ready_flows ?? 0}`,
         `最近分析：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
@@ -1225,7 +1225,7 @@
         } catch (err) {
           console.error(err);
         }
-      }, 30000);
+      }, 15000);
     }
   </script>
 </body>
