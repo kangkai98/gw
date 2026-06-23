@@ -134,23 +134,23 @@
         <form id="captureForm" class="inline-config-form panel-content-gap">
           <label>
             <div class="subtle">监听网卡</div>
-            <input aria-label="监听网卡" name="interface" value="Ethernet" placeholder="网卡名：Ethernet / 以太网 / 1" required />
+            <input aria-label="监听网卡" name="interface" value="WLAN" placeholder="网卡名：WLAN / Ethernet / 以太网 / 1" required />
           </label>
           <label>
             <div class="subtle">采集周期（秒）</div>
-            <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="采集周期(秒)" required />
+            <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="15" placeholder="采集周期(秒)" required />
           </label>
           <label>
             <div class="subtle">流空闲超时（秒）</div>
-            <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="空闲超时(秒)" required />
+            <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="15" placeholder="空闲超时(秒)" required />
           </label>
           <label>
             <div class="subtle">单流最长缓存（秒）</div>
-            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存(秒,0不限)" required />
+            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="120" placeholder="最长缓存(秒,0不限)" required />
           </label>
           <label>
             <div class="subtle">pcap保留时长（秒）</div>
-            <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留(秒,0删除)" required />
+            <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="0" placeholder="pcap保留(秒,0删除)" required />
           </label>
           <label>
             <div class="subtle">BPF过滤表达式</div>
@@ -893,7 +893,7 @@
       const state = capture?.running ? '运行中' : '已停止';
       const lines = [
         `状态：${state}；${capture?.message || '未启动在线监听'}`,
-        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；idle：${capture?.idle_timeout_sec || 120}s；最长缓存：${capture?.max_flow_duration_sec ?? 300}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 15}s；idle：${capture?.idle_timeout_sec || 15}s；最长缓存：${capture?.max_flow_duration_sec ?? 120}s；过滤：${capture?.bpf_filter || 'tcp'}`,
         `pcap保留：${capture?.pcap_retention_sec ?? 0}s；最近清理：${capture?.last_deleted_pcaps ?? 0} 个；累计清理：${capture?.total_deleted_pcaps ?? 0} 个`,
         `缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包；就绪流：${capture?.last_ready_flows ?? 0}`,
         `最近分析：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
@@ -1171,7 +1171,7 @@
         } catch (err) {
           console.error(err);
         }
-      }, 5000);
+      }, 15000);
 
     }
 
@@ -1225,7 +1225,7 @@
         } catch (err) {
           console.error(err);
         }
-      }, 10000);
+      }, 30000);
     }
   </script>
 </body>

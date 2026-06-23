@@ -182,10 +182,10 @@ def startup_online_capture() -> None:
     interface = os.getenv("AI_GATEWAY_LISTEN_INTERFACE", "").strip()
     if not interface:
         return
-    interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "60") or "60")
+    interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "15") or "15")
     bpf_filter = os.getenv("AI_GATEWAY_LISTEN_FILTER", "tcp")
-    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "120") or "120")
-    max_flow_duration = int(os.getenv("AI_GATEWAY_LISTEN_MAX_FLOW_DURATION", "300") or "300")
+    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "15") or "15")
+    max_flow_duration = int(os.getenv("AI_GATEWAY_LISTEN_MAX_FLOW_DURATION", "120") or "120")
     pcap_retention = int(os.getenv("AI_GATEWAY_LISTEN_PCAP_RETENTION", "0") or "0")
     try:
         capture_manager.start(
@@ -277,12 +277,12 @@ def api_capture_status():
 
 @app.post("/api/capture/start")
 def api_capture_start(
-    interface: str = Form(...),
+    interface: str = Form(default="WLAN"),
     capture_backend: str = Form(default=""),
-    interval_sec: int = Form(default=60),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -302,11 +302,11 @@ def api_capture_start(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -325,11 +325,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -348,11 +348,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -371,11 +371,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -394,11 +394,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -417,11 +417,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -440,11 +440,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=120),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:

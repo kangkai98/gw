@@ -100,9 +100,9 @@ class CachedTcpPacket:
 class CaptureStatus:
     running: bool = False
     interface: str = ""
-    interval_sec: int = 60
-    idle_timeout_sec: int = 120
-    max_flow_duration_sec: int = 300
+    interval_sec: int = 15
+    idle_timeout_sec: int = 15
+    max_flow_duration_sec: int = 120
     pcap_retention_sec: int = 0
     bpf_filter: str = "tcp"
     capture_mode: str = "linux"
@@ -163,10 +163,10 @@ class OnlineCaptureManager:
         self,
         interface: str,
         preferred_backend: str = "",
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -182,10 +182,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -218,9 +218,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -259,10 +259,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -295,9 +295,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -335,10 +335,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -371,9 +371,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -411,10 +411,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -447,9 +447,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -487,10 +487,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -523,9 +523,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -563,10 +563,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -599,9 +599,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
@@ -639,10 +639,10 @@ class OnlineCaptureManager:
     def start_windows(
         self,
         interface: str,
-        interval_sec: int = 60,
+        interval_sec: int = 15,
         bpf_filter: str = "tcp",
-        idle_timeout_sec: int = 120,
-        max_flow_duration_sec: int = 300,
+        idle_timeout_sec: int = 15,
+        max_flow_duration_sec: int = 120,
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
@@ -675,9 +675,9 @@ class OnlineCaptureManager:
             if shutil.which("tcpdump") is None:
                 raise RuntimeError("未找到 tcpdump，请先安装 tcpdump 或在具备抓包能力的环境中运行")
 
-        interval_sec = max(5, int(interval_sec or 60))
+        interval_sec = max(5, int(interval_sec or 15))
         bpf_filter = (bpf_filter or "tcp").strip() or "tcp"
-        idle_timeout_sec = max(5, int(idle_timeout_sec or 120))
+        idle_timeout_sec = max(5, int(idle_timeout_sec or 15))
         max_flow_duration_sec = max(0, int(max_flow_duration_sec or 0))
         pcap_retention_sec = max(0, int(pcap_retention_sec or 0))
 
