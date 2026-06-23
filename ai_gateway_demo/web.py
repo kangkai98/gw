@@ -9,6 +9,8 @@ import json
 import ssl
 import time
 import http.client
+import importlib
+import importlib.util
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -751,7 +753,86 @@ def _probe_ssl_context() -> ssl.SSLContext:
     return ssl._create_unverified_context()
 
 
+
+def _load_httpx():
+    if importlib.util.find_spec("httpx") is None:
+        return None
+    return importlib.import_module("httpx")
+
+
+def _run_llm_probe_via_httpx(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any] | None:
+    httpx = _load_httpx()
+    if httpx is None:
+        return None
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    headers = _probe_headers(api_key)
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(verify=False, trust_env=True, timeout=timeout_value) as client:
+            if stream_mode:
+                collected: list[str] = []
+                stream_error: str | None = None
+                ttfb_ms: float | None = None
+                ttft_ms: float | None = None
+                with client.stream("POST", chat_url, json=payload, headers=headers) as resp:
+                    status_code = int(resp.status_code or 0)
+                    for line in resp.iter_lines():
+                        now_ms = (time.perf_counter() - t0) * 1000
+                        if ttfb_ms is None:
+                            ttfb_ms = now_ms
+                        text = str(line or "").strip()
+                        if not text.startswith("data:"):
+                            continue
+                        payload_text = text[5:].strip()
+                        if not payload_text or payload_text == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(payload_text)
+                        except Exception:
+                            continue
+                        if isinstance(data, dict) and data.get("error"):
+                            stream_error = str(data.get("error"))
+                            continue
+                        choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+                        delta = choice.get("delta") if isinstance(choice, dict) else {}
+                        if isinstance(delta, dict) and delta.get("content"):
+                            if ttft_ms is None:
+                                ttft_ms = now_ms
+                            collected.append(str(delta.get("content")))
+                latency_ms = (time.perf_counter() - t0) * 1000
+                response_text = "".join(collected)[:2000]
+                if status_code >= 400:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: HTTP {status_code}", "probe_transport": "python_httpx"}
+                if stream_error:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: {stream_error}", "probe_transport": "python_httpx"}
+                if not response_text:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "probe_transport": "python_httpx"}
+                return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": "流式拨测完成", "probe_transport": "python_httpx"}
+
+            resp = client.post(chat_url, json=payload, headers=headers)
+            latency_ms = (time.perf_counter() - t0) * 1000
+            text = resp.text or ""
+            try:
+                parsed = resp.json()
+            except Exception:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 返回内容不是JSON", "probe_transport": "python_httpx"}
+            choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+            message = choice.get("message") if isinstance(choice, dict) else {}
+            short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+            if isinstance(parsed, dict) and parsed.get("error"):
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "probe_transport": "python_httpx"}
+            if resp.status_code >= 400:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: HTTP {resp.status_code}", "probe_transport": "python_httpx"}
+            if not short_text:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 未返回有效内容", "probe_transport": "python_httpx"}
+            return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "probe_transport": "python_httpx"}
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测异常: {exc}", "chat_url": chat_url, "probe_transport": "python_httpx"}
+
 def _run_llm_probe_via_python_http(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    httpx_result = _run_llm_probe_via_httpx(chat_url, api_key, payload, timeout_sec, stream_mode)
+    if httpx_result is not None:
+        return httpx_result
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     headers = _probe_headers(api_key)
     try:
