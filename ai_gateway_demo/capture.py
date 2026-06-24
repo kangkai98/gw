@@ -1409,7 +1409,7 @@ def _third_party_minor_for_sni(sni: str | None) -> str | None:
     for minor, domains in THIRD_PARTY_SNI_RULES.items():
         for domain in domains:
             normalized = domain.lower().rstrip(".")
-            if value == normalized or value.endswith(f".{normalized}"):
+            if value == normalized:
                 return minor
     return None
 
