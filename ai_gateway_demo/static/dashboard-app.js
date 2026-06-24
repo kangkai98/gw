@@ -846,7 +846,7 @@ function CapturePanel({ capture, form, setForm, onStart, onStartWindows, onStop,
       </div>
       <div className="mt-4 rounded-[20px] border border-white/8 bg-black/20 p-4 text-xs leading-6 text-slate-400">
         <div>${capture?.message || '未启动在线监听'}</div>
-        <div>周期：${capture?.interval_sec || form.interval_sec || 60}s · idle：${capture?.idle_timeout_sec || form.idle_timeout_sec || 120}s · 最长缓存：${capture?.max_flow_duration_sec ?? form.max_flow_duration_sec ?? 300}s</div>
+        <div>周期：${capture?.interval_sec || form.interval_sec || 15}s · idle：${capture?.idle_timeout_sec || form.idle_timeout_sec || 15}s · 最长缓存：${capture?.max_flow_duration_sec ?? form.max_flow_duration_sec ?? 90}s</div>
         <div>pcap保留：${capture?.pcap_retention_sec ?? form.pcap_retention_sec ?? 0}s · 最近窗口：${capture?.last_window_finished_at || '--'} · 清理 ${capture?.last_deleted_pcaps ?? 0} 个</div>
         <div>缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包 · 就绪流：${capture?.last_ready_flows ?? 0}</div>
         <div>最近结果：检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条</div>
@@ -898,8 +898,8 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [capture, setCapture] = useState({ running: false, interval_sec: 60, idle_timeout_sec: 120, max_flow_duration_sec: 300, pcap_retention_sec: 0, message: '未启动在线监听' });
-  const [captureForm, setCaptureForm] = useState({ interface: '', interval_sec: '60', idle_timeout_sec: '120', max_flow_duration_sec: '300', pcap_retention_sec: '0', bpf_filter: 'tcp' });
+  const [capture, setCapture] = useState({ running: false, interval_sec: 15, idle_timeout_sec: 15, max_flow_duration_sec: 90, pcap_retention_sec: 0, message: '未启动在线监听' });
+  const [captureForm, setCaptureForm] = useState({ interface: 'WLAN', interval_sec: '15', idle_timeout_sec: '15', max_flow_duration_sec: '90', pcap_retention_sec: '0', bpf_filter: 'tcp' });
 
   const refreshAll = useCallback(async (nextFilters = filters) => {
     const qs = buildQueryString(nextFilters);
@@ -937,7 +937,7 @@ function App() {
       } catch (error) {
         console.error(error);
       }
-    }, 10000);
+    }, 15000);
     return () => window.clearInterval(timer);
   }, [filters, refreshAll]);
 
@@ -1014,9 +1014,9 @@ function App() {
     try {
       const result = await postForm('/api/capture/start', {
         interface: captureForm.interface.trim(),
-        interval_sec: captureForm.interval_sec || '60',
-        idle_timeout_sec: captureForm.idle_timeout_sec || '120',
-        max_flow_duration_sec: captureForm.max_flow_duration_sec || '300',
+        interval_sec: captureForm.interval_sec || '15',
+        idle_timeout_sec: captureForm.idle_timeout_sec || '15',
+        max_flow_duration_sec: captureForm.max_flow_duration_sec || '90',
         pcap_retention_sec: captureForm.pcap_retention_sec || '0',
         bpf_filter: captureForm.bpf_filter || 'tcp',
       });
@@ -1037,9 +1037,9 @@ function App() {
     try {
       const result = await postForm('/api/capture/start-windows', {
         interface: captureForm.interface.trim(),
-        interval_sec: captureForm.interval_sec || '60',
-        idle_timeout_sec: captureForm.idle_timeout_sec || '120',
-        max_flow_duration_sec: captureForm.max_flow_duration_sec || '300',
+        interval_sec: captureForm.interval_sec || '15',
+        idle_timeout_sec: captureForm.idle_timeout_sec || '15',
+        max_flow_duration_sec: captureForm.max_flow_duration_sec || '90',
         pcap_retention_sec: captureForm.pcap_retention_sec || '0',
         bpf_filter: captureForm.bpf_filter || 'tcp',
       });
