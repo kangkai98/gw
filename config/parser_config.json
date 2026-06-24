@@ -1,0 +1,9 @@
+{
+  "token_log_enable": true,
+  "min_go_run": 10,
+  "min_roundtrips": 30,
+  "return_sum_max": 1400,
+  "allow_bad_ret_bursts": 2,
+  "segment_merge_gap_sec": 2.0,
+  "go_len_max": 200
+}
