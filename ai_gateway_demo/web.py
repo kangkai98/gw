@@ -4,6 +4,8 @@ import os
 import socket
 import subprocess
 import shlex
+from .app_traffic import observe_pcap_app_traffic
+    get_app_traffic_stats,
 import shutil
 import json
 import ssl
@@ -202,6 +204,16 @@ def startup_online_capture() -> None:
         pass
 
 
+@app.get("/api/app-traffic")
+def api_app_traffic(
+    app_name: str | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
+):
+    return get_app_traffic_stats(app_name=app_name, start_real=start_real, end_real=end_real)
+
+
+    observe_pcap_app_traffic(local_file)
 @app.get("/api/entries")
 def api_entries(
     category_major: str | None = Query(default=None),
@@ -460,6 +472,11 @@ def api_capture_start_windows(
     try:
         status = capture_manager.start_windows(
             interface=interface,
+@app.get("/app-traffic", response_class=HTMLResponse)
+def app_traffic_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "app_traffic"})
+
+
             interval_sec=interval_sec,
             bpf_filter=bpf_filter,
             idle_timeout_sec=idle_timeout_sec,

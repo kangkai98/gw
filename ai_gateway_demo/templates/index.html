@@ -16,6 +16,7 @@
       <a href="/" class="{% if page == 'home' %}active{% endif %}">主页</a>
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">配置</a>
       <a href="/app-traffic" class="{% if page == 'app_traffic' %}active{% endif %}">应用级流量观测</a>
+      <a href="/app-traffic" class="{% if page == 'app_traffic' %}active{% endif %}">应用级流量观测</a>
       <a href="/records" class="{% if page == 'records' %}active{% endif %}">详细记录</a>
       <a href="/probe" class="{% if page == 'probe' %}active{% endif %}">拨测</a>
     </nav>
@@ -289,6 +290,79 @@
         </div>
       </section>
 
+    {% if page == 'app_traffic' %}
+    <section class="glass panel filter-panel">
+      <div class="panel-head">
+        <div>
+          <h2>应用级流量观测</h2>
+          <p class="subtle">基于 TLS SNI 独立统计豆包、千问、智谱、DeepSeek 等 AI 应用的整条应用流量，不依赖 parser.py 的请求识别逻辑。</p>
+        </div>
+      </div>
+      <form id="appTrafficFilterForm" class="filter-form">
+        <label class="filter-item">
+          <span>开始时间</span>
+          <input type="datetime-local" id="appTrafficStart" aria-label="应用流量开始时间" />
+        </label>
+        <label class="filter-item">
+          <span>结束时间</span>
+          <input type="datetime-local" id="appTrafficEnd" aria-label="应用流量结束时间" />
+        </label>
+        <label class="filter-item">
+          <span>应用</span>
+          <select id="appTrafficName" aria-label="筛选AI应用">
+            <option value="">全部应用</option>
+            <option value="千问API">千问API</option>
+            <option value="千问">千问</option>
+            <option value="DeepSeek API">DeepSeek API</option>
+            <option value="DeepSeek">DeepSeek</option>
+            <option value="智谱API">智谱API</option>
+            <option value="智谱">智谱</option>
+            <option value="豆包">豆包</option>
+            <option value="ChatGPT">ChatGPT</option>
+            <option value="Gemini">Gemini</option>
+            <option value="Claude">Claude</option>
+            <option value="Kimi">Kimi</option>
+            <option value="元宝">元宝</option>
+            <option value="小微助手">小微助手</option>
+          </select>
+        </label>
+        <button type="submit" class="filter-btn">应用筛选</button>
+        <button type="button" id="resetAppTrafficFilter" class="filter-btn ghost-btn">重置</button>
+      </form>
+    </section>
+
+    <section class="cards cards-8 centered-cards">
+      <article class="stat glass"><h3>AI 应用流数</h3><p id="appTrafficTotalFlows">0</p><small>SNI 命中的流</small></article>
+      <article class="stat glass"><h3>上行总流量</h3><p id="appTrafficTotalUplink">0 B</p><small>客户端到应用</small></article>
+      <article class="stat glass"><h3>下行总流量</h3><p id="appTrafficTotalDownlink">0 B</p><small>应用到客户端</small></article>
+      <article class="stat glass"><h3>峰值速率</h3><p id="appTrafficPeakRate">0 bps</p><small>按秒聚合峰值</small></article>
+    </section>
+
+    <section class="grid-two charts-gap">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>流量趋势</h2><span class="subtle">按分钟聚合上下行</span></div>
+        <canvas id="appTrafficTrend"></canvas>
+      </section>
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>应用流量排行</h2><span class="subtle">按上下行总量</span></div>
+        <canvas id="appTrafficAppBar"></canvas>
+      </section>
+    </section>
+
+    <section class="glass panel table-panel">
+      <div class="panel-head"><h2>流级别统计</h2><span class="subtle">五元组、SNI、持续时间、上下行流量、峰值速率</span></div>
+      <table id="appTrafficFlowTable" class="data-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>应用</th><th>SNI</th><th>协议</th><th>五元组</th><th>客户端</th><th>服务端</th>
+            <th>开始</th><th>结束</th><th>持续(s)</th><th>上行</th><th>下行</th><th>峰值速率</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+    {% endif %}
+
       <div class="grid-two">
       <section class="glass panel probe-task-panel">
         <div class="panel-head">
@@ -372,6 +446,24 @@
             <option value="小微助手">小微助手</option>
           </select>
         </label>
+    const bytes = (v) => {
+      const n = Number(v || 0);
+      if (!Number.isFinite(n)) return '-';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let value = Math.max(0, n);
+      let idx = 0;
+      while (value >= 1024 && idx < units.length - 1) { value /= 1024; idx += 1; }
+      return `${idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`;
+    };
+    const rate = (v) => {
+      const n = Number(v || 0);
+      if (!Number.isFinite(n)) return '-';
+      const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+      let value = Math.max(0, n);
+      let idx = 0;
+      while (value >= 1000 && idx < units.length - 1) { value /= 1000; idx += 1; }
+      return `${idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`;
+    };
         <button type="submit" class="filter-btn">应用筛选</button>
         <button type="button" id="resetAppTrafficFilter" class="filter-btn ghost-btn">重置</button>
       </form>
@@ -846,6 +938,80 @@
           backgroundColor: 'transparent',
           tension: 0.32,
           pointRadius: 0,
+    function appTrafficQueryString() {
+      const q = new URLSearchParams();
+      if (has('appTrafficName') && $('appTrafficName').value) q.set('app_name', $('appTrafficName').value);
+      if (has('appTrafficStart')) {
+        const start = toServerTime($('appTrafficStart').value);
+        if (start) q.set('start_real', start);
+      }
+      if (has('appTrafficEnd')) {
+        const end = toServerTime($('appTrafficEnd').value);
+        if (end) q.set('end_real', end);
+      }
+      const qs = q.toString();
+      return qs ? `?${qs}` : '';
+    }
+
+    async function fetchAppTraffic() {
+      if (!has('appTrafficFlowTable')) return;
+      const resp = await fetch(`/api/app-traffic${appTrafficQueryString()}`);
+      const data = await resp.json();
+      renderAppTraffic(data);
+    }
+
+    function renderAppTraffic(data) {
+      if (has('appTrafficTotalFlows')) $('appTrafficTotalFlows').textContent = data.total_flows ?? 0;
+      if (has('appTrafficTotalUplink')) $('appTrafficTotalUplink').textContent = bytes(data.total_uplink_bytes);
+      if (has('appTrafficTotalDownlink')) $('appTrafficTotalDownlink').textContent = bytes(data.total_downlink_bytes);
+      if (has('appTrafficPeakRate')) $('appTrafficPeakRate').textContent = rate(data.peak_bps);
+
+      if (has('appTrafficFlowTable')) {
+        const rows = data.flows || [];
+        $('appTrafficFlowTable').querySelector('tbody').innerHTML = rows.map((row) => `
+          <tr>
+            <td>${esc(row.id)}</td><td>${esc(row.app_name)}</td><td>${esc(row.sni)}</td><td>${esc(row.protocol || 'TCP')}</td><td>${esc(row.flow_key)}</td>
+            <td>${esc(row.client_endpoint)}</td><td>${esc(row.server_endpoint)}</td>
+            <td>${esc(row.start_time_real)}</td><td>${esc(row.end_time_real)}</td><td>${num2(row.duration_sec)}</td>
+            <td>${bytes(row.uplink_bytes)}</td><td>${bytes(row.downlink_bytes)}</td><td>${rate(row.peak_bps)}</td>
+          </tr>`).join('') || '<tr><td colspan="13" class="subtle">暂无应用级流量数据</td></tr>';
+      }
+
+      if (has('appTrafficTrend')) {
+        charts.appTrafficTrend?.destroy?.();
+        const trend = data.trend || [];
+        charts.appTrafficTrend = new Chart($('appTrafficTrend'), {
+          type: 'line',
+          data: {
+            labels: trend.map(i => i.bucket),
+            datasets: [
+              { label: '上行', data: trend.map(i => i.uplink_bytes), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.14)', fill: true, tension: 0.25 },
+              { label: '下行', data: trend.map(i => i.downlink_bytes), borderColor: '#67d4b6', backgroundColor: 'rgba(103,212,182,.14)', fill: true, tension: 0.25 },
+            ],
+          },
+          options: chartOptions({ scales: { y: { ticks: { callback: (v) => bytes(v) } } } }),
+        });
+      }
+
+      if (has('appTrafficAppBar')) {
+        charts.appTrafficAppBar?.destroy?.();
+        const items = data.by_app || [];
+        charts.appTrafficAppBar = new Chart($('appTrafficAppBar'), {
+          type: 'bar',
+          data: {
+            labels: items.map(i => i.app_name),
+            datasets: [{
+              label: '总流量',
+              data: items.map(i => Number(i.uplink_bytes || 0) + Number(i.downlink_bytes || 0)),
+              backgroundColor: '#ffc56e',
+              borderRadius: 8,
+            }],
+          },
+          options: chartOptions({ scales: { y: { ticks: { callback: (v) => bytes(v) } } } }),
+        });
+      }
+    }
+
           pointHoverRadius: 4,
           spanGaps: true,
         };
@@ -986,6 +1152,13 @@
         `累计：${capture?.total_inserted ?? 0} 条入库`,
       ];
       if (capture?.last_error) lines.push(`错误：${capture.last_error}`);
+    if (has('appTrafficFilterForm')) $('appTrafficFilterForm').onsubmit = async (e) => { e.preventDefault(); await fetchAppTraffic(); };
+    if (has('resetAppTrafficFilter')) $('resetAppTrafficFilter').onclick = async () => {
+      $('appTrafficStart').value = '';
+      $('appTrafficEnd').value = '';
+      $('appTrafficName').value = '';
+      await fetchAppTraffic();
+    };
       $('captureStatus').textContent = lines.join('\n');
     }
 
@@ -1130,6 +1303,16 @@
             try { resolve(JSON.parse(xhr.responseText || '{}')); } catch (e) { reject(e); }
           } else {
             reject(new Error(`上传失败: ${xhr.status}`));
+    if (document.body.dataset.page === 'app_traffic') {
+      fetchAppTraffic().catch((err) => { console.error(err); $('status').textContent = `加载应用级流量失败：${err.message || err}`; });
+      window.setInterval(async () => {
+        try {
+          await fetchAppTraffic();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 15000);
+    }
           }
         };
         xhr.onerror = () => reject(new Error('网络异常，上传失败'));

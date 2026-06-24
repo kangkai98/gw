@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import platform
+from .app_traffic import flush_app_traffic_observer, observe_pcap_app_traffic, reset_app_traffic_observer
 import multiprocessing
 import queue as queue_module
 from collections import defaultdict, deque
@@ -126,6 +127,7 @@ class AppFlowStats:
     buckets: dict[int, int] = field(default_factory=dict)
 
 
+            reset_app_traffic_observer()
 @dataclass
 class CaptureStatus:
     running: bool = False
@@ -202,6 +204,7 @@ class OnlineCaptureManager:
         pcap_retention_sec: int = 0,
     ) -> dict[str, Any]:
         return self._start_with_mode(
+            reset_app_traffic_observer()
             interface=interface,
             interval_sec=interval_sec,
             bpf_filter=bpf_filter,
@@ -277,6 +280,7 @@ class OnlineCaptureManager:
                 capture_backend=backend,
                 started_at=now,
                 message=(
+            reset_app_traffic_observer()
                     f"在线监听已启动（{mode}）：{interface}，每 {interval_sec} 秒采集一次，"
                     f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
                 ),
@@ -353,6 +357,7 @@ class OnlineCaptureManager:
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
                 bpf_filter=bpf_filter,
+            reset_app_traffic_observer()
                 started_at=now,
                 message=(
                     f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
@@ -429,6 +434,7 @@ class OnlineCaptureManager:
                 idle_timeout_sec=idle_timeout_sec,
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
+            reset_app_traffic_observer()
                 bpf_filter=bpf_filter,
                 capture_mode=mode,
                 started_at=now,
@@ -505,6 +511,7 @@ class OnlineCaptureManager:
                 interface=interface,
                 interval_sec=interval_sec,
                 idle_timeout_sec=idle_timeout_sec,
+            reset_app_traffic_observer()
                 max_flow_duration_sec=max_flow_duration_sec,
                 pcap_retention_sec=pcap_retention_sec,
                 bpf_filter=bpf_filter,
@@ -581,6 +588,7 @@ class OnlineCaptureManager:
             self._status = CaptureStatus(
                 running=True,
                 interface=interface,
+            reset_app_traffic_observer()
                 interval_sec=interval_sec,
                 idle_timeout_sec=idle_timeout_sec,
                 max_flow_duration_sec=max_flow_duration_sec,
@@ -589,6 +597,7 @@ class OnlineCaptureManager:
                 capture_mode=mode,
                 started_at=now,
                 message=(
+        flush_app_traffic_observer()
                     f"在线监听已启动（{mode}）：{interface}，每 {interval_sec} 秒采集一次，"
                     f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
                 ),
@@ -678,6 +687,7 @@ class OnlineCaptureManager:
                 daemon=True,
             )
             self._thread.start()
+        flush_app_traffic_observer()
             return dict(self._status.__dict__)
 
     def start_windows(
@@ -746,6 +756,7 @@ class OnlineCaptureManager:
                 started_at=now,
                 message=(
                     f"在线监听已启动：{interface}，每 {interval_sec} 秒采集一次，"
+                observe_pcap_app_traffic(file_path)
                     f"空闲超时 {idle_timeout_sec} 秒，最长缓存 {max_flow_duration_sec or '不限'} 秒"
                 ),
             )
