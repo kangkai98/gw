@@ -18,12 +18,28 @@ from scapy.all import IP, TCP, PcapReader
 from scapy.utils import RawPcapReader, RawPcapWriter
 
 from .db import insert_entry, insert_traffic_summary, list_self_hosted
-from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
+from .parser import _extract_tls_sni, parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
 ONLINE_FILE_STABLE_SEC = 1.0
 ONLINE_STALL_MIN_BYTES = 4096
+THIRD_PARTY_SNI_CACHE_TTL_SEC = 60 * 60
+THIRD_PARTY_SNI_RULES: dict[str, tuple[str, ...]] = {
+    "千问API": ("dashscope.aliyuncs.com",),
+    "千问": ("chat2.qianwen.com",),
+    "DeepSeek API": ("api.deepseek.com",),
+    "DeepSeek": ("chat.deepseek.com",),
+    "智谱API": ("open.bigmodel.cn",),
+    "智谱": ("chatglm.cn",),
+    "豆包": ("www.doubao.com",),
+    "ChatGPT": ("chatgpt.com",),
+    "Gemini": ("gemini.google.com",),
+    "Claude": ("claude.ai",),
+    "Kimi": ("www.kimi.com",),
+    "元宝": ("yuanbao.tencent.com",),
+    "小微助手": ("api.assistant.welink.huawei.com",),
+}
 
 
 def _parse_ready_pcap_worker(pcap_path: str, configs: list[dict], result_queue: Any) -> None:
@@ -147,6 +163,7 @@ class OnlineCaptureManager:
     _proc: subprocess.Popen[bytes] | None = field(default=None, init=False)
     _status: CaptureStatus = field(default_factory=CaptureStatus, init=False)
     _flow_cache: dict[str, list[CachedTcpPacket]] = field(default_factory=dict, init=False)
+    _flow_third_party_cache: dict[str, tuple[str, float]] = field(default_factory=dict, init=False)
     _next_packet_seq: int = field(default=0, init=False)
     _capture_backend: str = field(default="", init=False)
     _run_started_at: float = field(default=0.0, init=False)
@@ -229,6 +246,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             self._capture_backend = backend
             now = _now_text()
@@ -306,6 +324,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             self._run_started_at = time.time()
             now = _now_text()
@@ -382,6 +401,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -458,6 +478,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -534,6 +555,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -610,6 +632,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -686,6 +709,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            self._flow_third_party_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -1043,7 +1067,9 @@ class OnlineCaptureManager:
         entries, traffic_summary = _parse_ready_pcap_in_process(analyzed_pcap, configs, self._stop_event)
         insert_traffic_summary({**traffic_summary, "source": "online"})
         inserted = 0
+        self._expire_flow_third_party_cache()
         for entry in entries:
+            entry = self._apply_flow_third_party_cache(entry)
             if not insert_entry(entry):
                 continue
             inserted += 1
@@ -1082,6 +1108,46 @@ class OnlineCaptureManager:
             self._status.total_detected += len(entries)
             self._status.total_inserted += inserted
             self._status.analyzed_ready_files += 1
+
+    def _remember_third_party_sni_from_packets(self, packets: list[CachedTcpPacket]) -> None:
+        now = time.time()
+        expires_at = now + THIRD_PARTY_SNI_CACHE_TTL_SEC
+        with self._lock:
+            for packet in packets:
+                payload = _extract_tcp_payload_from_ethernet(packet.raw_packet)
+                if not payload:
+                    continue
+                sni = _extract_tls_sni(payload)
+                minor = _third_party_minor_for_sni(sni)
+                if not minor:
+                    continue
+                cache_key = _normalize_flow_key(packet.flow_key)
+                self._flow_third_party_cache[cache_key] = (minor, expires_at)
+
+    def _expire_flow_third_party_cache(self) -> None:
+        now = time.time()
+        with self._lock:
+            expired = [key for key, (_, expires_at) in self._flow_third_party_cache.items() if expires_at <= now]
+            for key in expired:
+                self._flow_third_party_cache.pop(key, None)
+
+    def _apply_flow_third_party_cache(self, entry: dict[str, Any]) -> dict[str, Any]:
+        if entry.get("category_major") != "实验AI":
+            return entry
+        cache_key = _normalize_flow_key(str(entry.get("flow_key") or ""))
+        now = time.time()
+        with self._lock:
+            cached = self._flow_third_party_cache.get(cache_key)
+            if cached is None:
+                return entry
+            minor, expires_at = cached
+            if expires_at <= now:
+                self._flow_third_party_cache.pop(cache_key, None)
+                return entry
+        patched = dict(entry)
+        patched["category_major"] = "三方AI"
+        patched["category_minor"] = minor
+        return patched
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
@@ -1157,6 +1223,7 @@ class OnlineCaptureManager:
             if file_path.stat().st_size > 0:
                 packets = _extract_cached_tcp_packets(file_path, start_seq=self._next_packet_seq)
                 self._next_packet_seq += len(packets)
+                self._remember_third_party_sni_from_packets(packets)
                 for flow_key, flow_packets in _group_cached_flows(packets).items():
                     cached = self._flow_cache.setdefault(flow_key, [])
                     cached.extend(flow_packets)
@@ -1333,6 +1400,61 @@ def _extract_ipv4_tcp_meta_from_ethernet(raw_packet: bytes) -> tuple[str, int, s
     dport = int.from_bytes(raw_packet[tcp_offset + 2 : tcp_offset + 4], "big")
     tcp_flags = raw_packet[tcp_offset + 13]
     return src, sport, dst, dport, tcp_flags
+
+
+def _third_party_minor_for_sni(sni: str | None) -> str | None:
+    value = (sni or "").strip().lower().rstrip(".")
+    if not value:
+        return None
+    for minor, domains in THIRD_PARTY_SNI_RULES.items():
+        for domain in domains:
+            normalized = domain.lower().rstrip(".")
+            if value == normalized or value.endswith(f".{normalized}"):
+                return minor
+    return None
+
+
+def _normalize_flow_key(flow_key: str) -> str:
+    try:
+        left, right = flow_key.split("-", 1)
+    except ValueError:
+        return flow_key
+    return f"{left}-{right}" if left <= right else f"{right}-{left}"
+
+
+def _extract_tcp_payload_from_ethernet(raw_packet: bytes) -> bytes:
+    if len(raw_packet) < 14:
+        return b""
+    eth_type = int.from_bytes(raw_packet[12:14], "big")
+    ip_offset = 14
+    while eth_type in (0x8100, 0x88A8, 0x9100):
+        if len(raw_packet) < ip_offset + 4:
+            return b""
+        eth_type = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+        ip_offset += 4
+    if eth_type != 0x0800 or len(raw_packet) < ip_offset + 20:
+        return b""
+    version_ihl = raw_packet[ip_offset]
+    if version_ihl >> 4 != 4:
+        return b""
+    ihl = (version_ihl & 0x0F) * 4
+    if ihl < 20 or len(raw_packet) < ip_offset + ihl:
+        return b""
+    if raw_packet[ip_offset + 9] != 6:
+        return b""
+    fragment = int.from_bytes(raw_packet[ip_offset + 6 : ip_offset + 8], "big")
+    if fragment & 0x1FFF:
+        return b""
+    total_len = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+    ip_end = min(len(raw_packet), ip_offset + total_len) if total_len else len(raw_packet)
+    tcp_offset = ip_offset + ihl
+    if len(raw_packet) < tcp_offset + 20:
+        return b""
+    data_offset = (raw_packet[tcp_offset + 12] >> 4) * 4
+    payload_offset = tcp_offset + data_offset
+    if data_offset < 20 or payload_offset > ip_end:
+        return b""
+    return bytes(raw_packet[payload_offset:ip_end])
 
 
 def _group_cached_flows(packets: list[CachedTcpPacket]) -> dict[str, list[CachedTcpPacket]]:
