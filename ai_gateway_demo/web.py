@@ -4,15 +4,19 @@ import os
 import socket
 import subprocess
 import shlex
+import shutil
 import json
 import ssl
 import time
 import http.client
+import importlib
+import importlib.util
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
+import urllib.request
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -30,11 +34,12 @@ from .db import (
     get_stats,
     init_db,
     insert_entry,
+    insert_traffic_summary,
     list_entries,
     list_self_hosted,
     refresh_entry_categories_by_self_hosted,
 )
-from .parser import parse_pcap_to_entries
+from .parser import parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
 
 app = FastAPI(title="AI Gateway Demo")
 
@@ -77,6 +82,15 @@ _next_probe_task_id = 1
 _follow_probe_tasks: dict[int, FollowProbeTask] = {}
 _next_follow_probe_task_id = 1
 DEFAULT_HEALTH_CFG = {"ttft_alert": 3500.0, "tpot_alert": 180.0}
+_TEXT_DECODE_KWARGS = {"encoding": "utf-8", "errors": "ignore"}
+_PROBE_TRANSPORT_MODE_ENV = "AI_GATEWAY_PROBE_TRANSPORT"
+
+
+def _probe_transport_mode() -> str:
+    mode = os.getenv(_PROBE_TRANSPORT_MODE_ENV, "httpx").strip().lower()
+    if mode in {"curl", "auto", "httpx", "python", "python_http"}:
+        return mode
+    return "httpx"
 
 
 def _probe_task_view(task: ProbeTask) -> dict[str, Any]:
@@ -170,10 +184,10 @@ def startup_online_capture() -> None:
     interface = os.getenv("AI_GATEWAY_LISTEN_INTERFACE", "").strip()
     if not interface:
         return
-    interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "60") or "60")
+    interval = int(os.getenv("AI_GATEWAY_LISTEN_INTERVAL", "15") or "15")
     bpf_filter = os.getenv("AI_GATEWAY_LISTEN_FILTER", "tcp")
-    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "120") or "120")
-    max_flow_duration = int(os.getenv("AI_GATEWAY_LISTEN_MAX_FLOW_DURATION", "300") or "300")
+    idle_timeout = int(os.getenv("AI_GATEWAY_LISTEN_IDLE_TIMEOUT", "15") or "15")
+    max_flow_duration = int(os.getenv("AI_GATEWAY_LISTEN_MAX_FLOW_DURATION", "90") or "90")
     pcap_retention = int(os.getenv("AI_GATEWAY_LISTEN_PCAP_RETENTION", "0") or "0")
     try:
         capture_manager.start(
@@ -247,7 +261,10 @@ async def api_upload(file: UploadFile = File(...)):
 
     observe_pcap_app_traffic(local_file)
     configs = list_self_hosted()
-    entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
+    with traffic_totals_lock:
+        entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
+        traffic_summary = summarize_pcap_traffic(local_file, self_hosted_configs=configs)
+        insert_traffic_summary({**traffic_summary, "source": "upload"})
     inserted = 0
     for e in entries:
         if insert_entry(e):
@@ -272,12 +289,12 @@ def api_capture_status():
 
 @app.post("/api/capture/start")
 def api_capture_start(
-    interface: str = Form(...),
+    interface: str = Form(default="WLAN"),
     capture_backend: str = Form(default=""),
-    interval_sec: int = Form(default=60),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -297,11 +314,11 @@ def api_capture_start(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -320,11 +337,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -343,11 +360,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -366,11 +383,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -389,11 +406,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -412,11 +429,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -435,11 +452,11 @@ def api_capture_start_windows(
 
 @app.post("/api/capture/start-windows")
 def api_capture_start_windows(
-    interface: str = Form(...),
-    interval_sec: int = Form(default=60),
+    interface: str = Form(default="WLAN"),
+    interval_sec: int = Form(default=15),
     bpf_filter: str = Form(default="tcp"),
-    idle_timeout_sec: int = Form(default=120),
-    max_flow_duration_sec: int = Form(default=300),
+    idle_timeout_sec: int = Form(default=15),
+    max_flow_duration_sec: int = Form(default=90),
     pcap_retention_sec: int = Form(default=0),
 ):
     try:
@@ -602,7 +619,7 @@ def api_probe_curl(
         ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, **_TEXT_DECODE_KWARGS)
     except Exception as exc:  # pragma: no cover - runtime dependent
         return {"ok": False, "message": f"curl 执行失败: {exc}"}
 
@@ -675,8 +692,9 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
     if stream_mode:
         if "-N" not in cmd:
             cmd.insert(1, "-N")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_TEXT_DECODE_KWARGS)
         collected: list[str] = []
+        stream_error: str | None = None
         ttfb_ms: float | None = None
         ttft_ms: float | None = None
         while True:
@@ -701,6 +719,9 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
                 data = json.loads(payload_text)
             except Exception:
                 continue
+            if isinstance(data, dict) and data.get("error"):
+                stream_error = str(data.get("error"))
+                continue
             choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
             delta = choice.get("delta") if isinstance(choice, dict) else {}
             if isinstance(delta, dict) and delta.get("content"):
@@ -711,10 +732,16 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
         rc = proc.wait(timeout=1)
         if rc != 0:
             return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        if stream_error:
+            return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "".join(collected)[:2000], "message": f"流式拨测失败: {stream_error}", "command": " ".join(shlex.quote(part) for part in cmd)}
+        if not collected:
+            return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "", "message": "流式拨测失败: 未收到有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
         latency_ms = (time.perf_counter() - t0) * 1000
         return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "ttfb_ms": None if ttfb_ms is None else round(ttfb_ms, 1), "ttft_ms": None if ttft_ms is None else round(ttft_ms, 1), "response_text": "".join(collected)[:2000], "message": "流式拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0, **_TEXT_DECODE_KWARGS
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
     latency_ms = (time.perf_counter() - t0) * 1000
@@ -728,10 +755,164 @@ def _run_curl_command_with_metrics(curl_command: str, timeout_sec: float, stream
     choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
     message = choice.get("message") if isinstance(choice, dict) else {}
     short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+    if isinstance(parsed, dict) and parsed.get("error"):
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "message": f"标准拨测失败: {parsed.get('error')}", "command": " ".join(shlex.quote(part) for part in cmd)}
+    if not short_text:
+        return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": out[:2000], "message": "标准拨测失败: 未返回有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
     return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
 
 
 
+
+
+def _probe_headers(api_key: str) -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key.strip():
+        headers["Authorization"] = f"Bearer {api_key.strip()}"
+    return headers
+
+
+def _probe_ssl_context() -> ssl.SSLContext:
+    # Match `curl -k` for probe traffic: allow enterprise TLS interception or
+    # self-signed LLM endpoints without failing certificate verification.
+    return ssl._create_unverified_context()
+
+
+
+def _load_httpx():
+    if importlib.util.find_spec("httpx") is None:
+        return None
+    return importlib.import_module("httpx")
+
+
+def _run_llm_probe_via_httpx(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any] | None:
+    httpx = _load_httpx()
+    if httpx is None:
+        return None
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    headers = _probe_headers(api_key)
+    t0 = time.perf_counter()
+    try:
+        with httpx.Client(verify=False, trust_env=True, timeout=timeout_value) as client:
+            if stream_mode:
+                collected: list[str] = []
+                stream_error: str | None = None
+                ttfb_ms: float | None = None
+                ttft_ms: float | None = None
+                with client.stream("POST", chat_url, json=payload, headers=headers) as resp:
+                    status_code = int(resp.status_code or 0)
+                    for line in resp.iter_lines():
+                        now_ms = (time.perf_counter() - t0) * 1000
+                        if ttfb_ms is None:
+                            ttfb_ms = now_ms
+                        text = str(line or "").strip()
+                        if not text.startswith("data:"):
+                            continue
+                        payload_text = text[5:].strip()
+                        if not payload_text or payload_text == "[DONE]":
+                            continue
+                        try:
+                            data = json.loads(payload_text)
+                        except Exception:
+                            continue
+                        if isinstance(data, dict) and data.get("error"):
+                            stream_error = str(data.get("error"))
+                            continue
+                        choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
+                        delta = choice.get("delta") if isinstance(choice, dict) else {}
+                        if isinstance(delta, dict) and delta.get("content"):
+                            if ttft_ms is None:
+                                ttft_ms = now_ms
+                            collected.append(str(delta.get("content")))
+                latency_ms = (time.perf_counter() - t0) * 1000
+                response_text = "".join(collected)[:2000]
+                if status_code >= 400:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: HTTP {status_code}", "probe_transport": "python_httpx"}
+                if stream_error:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: {stream_error}", "probe_transport": "python_httpx"}
+                if not response_text:
+                    return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "probe_transport": "python_httpx"}
+                return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": ttfb_ms, "ttft_ms": ttft_ms, "response_text": response_text, "chat_url": chat_url, "message": "流式拨测完成", "probe_transport": "python_httpx"}
+
+            resp = client.post(chat_url, json=payload, headers=headers)
+            latency_ms = (time.perf_counter() - t0) * 1000
+            text = resp.text or ""
+            try:
+                parsed = resp.json()
+            except Exception:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 返回内容不是JSON", "probe_transport": "python_httpx"}
+            choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+            message = choice.get("message") if isinstance(choice, dict) else {}
+            short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+            if isinstance(parsed, dict) and parsed.get("error"):
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "probe_transport": "python_httpx"}
+            if resp.status_code >= 400:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: HTTP {resp.status_code}", "probe_transport": "python_httpx"}
+            if not short_text:
+                return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 未返回有效内容", "probe_transport": "python_httpx"}
+            return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": resp.status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "probe_transport": "python_httpx"}
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测异常: {exc}", "chat_url": chat_url, "probe_transport": "python_httpx"}
+
+def _run_llm_probe_via_python_http(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
+    httpx_result = _run_llm_probe_via_httpx(chat_url, api_key, payload, timeout_sec, stream_mode)
+    if httpx_result is not None:
+        return httpx_result
+    timeout_value = max(2.0, min(float(timeout_sec), 90.0))
+    headers = _probe_headers(api_key)
+    try:
+        if stream_mode:
+            probe = _http_post_stream_probe(chat_url, payload, headers, timeout_value)
+            status_code = probe.get("status_code")
+            response_text = str(probe.get("response_text") or "")
+            latency_ms = float(probe.get("latency_ms") or 0.0)
+            if status_code and int(status_code) >= 400:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": response_text, "chat_url": chat_url, "message": f"流式拨测失败: HTTP {status_code}", "probe_transport": "python_http"}
+            if not response_text:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "probe_transport": "python_http"}
+            return {"ok": True, "kind": "llm_stream", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "ttfb_ms": probe.get("ttfb_ms"), "ttft_ms": probe.get("ttft_ms"), "response_text": response_text, "chat_url": chat_url, "message": "流式拨测完成", "probe_transport": "python_http"}
+
+        status_code, raw, latency_ms = _http_post_json(chat_url, payload, headers, timeout_value)
+        text = raw.decode("utf-8", errors="ignore")
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 返回内容不是JSON", "probe_transport": "python_http"}
+        choice = (parsed.get("choices") or [{}])[0] if isinstance(parsed, dict) else {}
+        message = choice.get("message") if isinstance(choice, dict) else {}
+        short_text = str((message or {}).get("content") or choice.get("text") or "")[:2000]
+        if isinstance(parsed, dict) and parsed.get("error"):
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "probe_transport": "python_http"}
+        if status_code >= 400:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text or text[:2000], "chat_url": chat_url, "message": f"标准拨测失败: HTTP {status_code}", "probe_transport": "python_http"}
+        if not short_text:
+            return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": text[:2000], "chat_url": chat_url, "message": "标准拨测失败: 未返回有效内容", "probe_transport": "python_http"}
+        return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": status_code, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "probe_transport": "python_http"}
+    except (TimeoutError, socket.timeout):
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测超时({timeout_value:.0f}s)", "chat_url": chat_url, "probe_transport": "python_http"}
+    except Exception as exc:  # pragma: no cover - runtime dependent
+        return {"ok": False, "kind": "llm", "availability": "不可用", "status_code": None, "message": f"拨测异常: {exc}", "chat_url": chat_url, "probe_transport": "python_http"}
+
+
+def _curl_probe_needs_python_fallback(result: dict[str, Any]) -> bool:
+    if result.get("ok"):
+        return False
+    message = str(result.get("message") or "")
+    lowered = message.lower()
+    curl_transport_failures = (
+        "no such file",
+        "找不到",
+        "执行失败",
+        "curl:",
+        "failed to connect",
+        "could not connect",
+        "connection timed out",
+        "operation timed out",
+        "connection refused",
+        "ssl certificate problem",
+        "schannel",
+    )
+    return any(pattern in lowered or pattern in message for pattern in curl_transport_failures)
 
 def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any], timeout_sec: float, stream_mode: bool) -> dict[str, Any]:
     headers = ["-H", "Content-Type: application/json"]
@@ -750,10 +931,13 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     timeout_value = max(2.0, min(float(timeout_sec), 90.0))
     if stream_mode:
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **_TEXT_DECODE_KWARGS
+            )
         except Exception as exc:
             return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {exc}", "command": " ".join(shlex.quote(part) for part in cmd)}
         collected: list[str] = []
+        stream_error: str | None = None
         ttfb_ms: float | None = None
         ttft_ms: float | None = None
         try:
@@ -779,6 +963,9 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
                     data = json.loads(payload_text)
                 except Exception:
                     continue
+                if isinstance(data, dict) and data.get("error"):
+                    stream_error = str(data.get("error"))
+                    continue
                 choice = (data.get("choices") or [{}])[0] if isinstance(data, dict) else {}
                 delta = choice.get("delta") if isinstance(choice, dict) else {}
                 if isinstance(delta, dict) and delta.get("content"):
@@ -789,6 +976,10 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
             rc = proc.wait(timeout=1)
             if rc != 0:
                 return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测异常: {stderr or 'curl失败'}", "command": " ".join(shlex.quote(part) for part in cmd)}
+            if stream_error:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "".join(collected)[:2000], "chat_url": chat_url, "message": f"流式拨测失败: {stream_error}", "command": " ".join(shlex.quote(part) for part in cmd)}
+            if not collected:
+                return {"ok": False, "kind": "llm_stream", "availability": "不可用", "status_code": None, "latency_ms": round((time.perf_counter() - t0) * 1000, 1), "response_text": "", "chat_url": chat_url, "message": "流式拨测失败: 未收到有效内容", "command": " ".join(shlex.quote(part) for part in cmd)}
         finally:
             if proc.stdout:
                 proc.stdout.close()
@@ -810,7 +1001,9 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
         }
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_value + 5.0, **_TEXT_DECODE_KWARGS
+        )
     except subprocess.TimeoutExpired:
         return {"ok": False, "kind": "llm", "availability": "不可用", "message": f"拨测超时({timeout_value:.0f}s)", "command": " ".join(shlex.quote(part) for part in cmd)}
     latency_ms = (time.perf_counter() - t0) * 1000
@@ -828,8 +1021,33 @@ def _run_llm_probe_via_curl(chat_url: str, api_key: str, payload: dict[str, Any]
     if isinstance(parsed, dict) and parsed.get("error"):
         return {"ok": False, "kind": "llm_standard", "availability": "不可用", "status_code": None, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": f"标准拨测失败: {parsed.get('error')}", "command": " ".join(shlex.quote(part) for part in cmd)}
     return {"ok": True, "kind": "llm_standard", "availability": "可用", "status_code": 200, "latency_ms": round(latency_ms, 1), "response_text": short_text, "chat_url": chat_url, "message": "标准拨测完成", "command": " ".join(shlex.quote(part) for part in cmd)}
-def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
-    parsed = urlparse(url)
+
+def _proxy_auth_headers(proxy) -> dict[str, str]:
+    if not proxy.username:
+        return {}
+    import base64
+
+    user = unquote(proxy.username)
+    password = unquote(proxy.password or "")
+    token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+    return {"Proxy-Authorization": f"Basic {token}"}
+
+
+def _probe_proxy_for(parsed) -> object | None:
+    host = parsed.hostname or ""
+    if not host or urllib.request.proxy_bypass(host):
+        return None
+    proxies = urllib.request.getproxies()
+    proxy_url = proxies.get(parsed.scheme) or proxies.get(parsed.scheme.lower()) or proxies.get("all")
+    if not proxy_url:
+        return None
+    if "://" not in proxy_url:
+        proxy_url = f"http://{proxy_url}"
+    proxy = urlparse(proxy_url)
+    return proxy if proxy.hostname else None
+
+
+def _open_probe_connection(parsed, timeout_sec: float) -> tuple[http.client.HTTPConnection | http.client.HTTPSConnection, str, dict[str, str]]:
     scheme = parsed.scheme or "http"
     host = parsed.hostname or ""
     if not host:
@@ -838,14 +1056,38 @@ def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_se
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    conn: http.client.HTTPConnection | http.client.HTTPSConnection
+    proxy = _probe_proxy_for(parsed)
+    extra_headers: dict[str, str] = {}
     if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+        if proxy:
+            proxy_port = proxy.port or (443 if proxy.scheme == "https" else 8080)
+            if proxy.scheme == "https":
+                conn: http.client.HTTPConnection | http.client.HTTPSConnection = http.client.HTTPSConnection(proxy.hostname, proxy_port, timeout=timeout_sec, context=_probe_ssl_context())
+            else:
+                conn = http.client.HTTPConnection(proxy.hostname, proxy_port, timeout=timeout_sec)
+            conn.set_tunnel(host, port, headers=_proxy_auth_headers(proxy))
+            return conn, path, extra_headers
+        return http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=_probe_ssl_context()), path, extra_headers
+
+    if proxy:
+        proxy_port = proxy.port or (443 if proxy.scheme == "https" else 8080)
+        if proxy.scheme == "https":
+            conn = http.client.HTTPSConnection(proxy.hostname, proxy_port, timeout=timeout_sec, context=_probe_ssl_context())
+        else:
+            conn = http.client.HTTPConnection(proxy.hostname, proxy_port, timeout=timeout_sec)
+        extra_headers.update(_proxy_auth_headers(proxy))
+        return conn, parsed.geturl(), extra_headers
+    return http.client.HTTPConnection(host, port, timeout=timeout_sec), path, extra_headers
+
+
+def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> tuple[int, bytes, float]:
+    parsed = urlparse(url)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    conn, path, extra_headers = _open_probe_connection(parsed, timeout_sec)
+    request_headers = dict(headers)
+    request_headers.update(extra_headers)
     start = time.perf_counter()
-    conn.request("POST", path, body=body, headers=headers)
+    conn.request("POST", path, body=body, headers=request_headers)
     resp = conn.getresponse()
     raw = resp.read()
     latency_ms = (time.perf_counter() - start) * 1000
@@ -856,23 +1098,13 @@ def _http_post_json(url: str, payload: dict, headers: dict[str, str], timeout_se
 
 def _http_post_stream_probe(url: str, payload: dict, headers: dict[str, str], timeout_sec: float) -> dict:
     parsed = urlparse(url)
-    scheme = parsed.scheme or "http"
-    host = parsed.hostname or ""
-    if not host:
-        raise ValueError("URL 缺少主机地址")
-    port = parsed.port or (443 if scheme == "https" else 80)
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    conn: http.client.HTTPConnection | http.client.HTTPSConnection
-    if scheme == "https":
-        conn = http.client.HTTPSConnection(host, port, timeout=timeout_sec, context=ssl.create_default_context())
-    else:
-        conn = http.client.HTTPConnection(host, port, timeout=timeout_sec)
+    conn, path, extra_headers = _open_probe_connection(parsed, timeout_sec)
+    request_headers = dict(headers)
+    request_headers.update(extra_headers)
 
     t0 = time.perf_counter()
-    conn.request("POST", path, body=body, headers=headers)
+    conn.request("POST", path, body=body, headers=request_headers)
     resp = conn.getresponse()
     status = int(resp.status or 0)
     ttfb_ms: float | None = None
@@ -942,7 +1174,20 @@ def _run_llm_probe(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": stream_mode,
     }
-    return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
+    transport_mode = _probe_transport_mode()
+    if transport_mode in {"httpx", "python", "python_http"}:
+        return _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
+    if transport_mode == "curl":
+        return _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
+    if shutil.which("curl"):
+        curl_result = _run_llm_probe_via_curl(chat_url, api_key, payload, timeout_value, stream_mode)
+        curl_result.setdefault("probe_transport", "curl")
+        if curl_result.get("ok") or not _curl_probe_needs_python_fallback(curl_result):
+            return curl_result
+        fallback = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
+        fallback["message"] = f"curl不可用，已使用Python HTTP备选路径: {fallback.get('message') or ''}"
+        return fallback
+    return _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_value, stream_mode)
 
 
 @app.post("/api/probe/llm")
@@ -963,9 +1208,24 @@ def api_probe_llm(
         "messages": [{"role": "user", "content": (question or "你好").strip() or "你好"}],
         "stream": (mode or "standard").strip() == "stream",
     }
-    rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(_to_chat_completions_url(target), api_key, payload)
-    result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
-    result["chat_url"] = _to_chat_completions_url(target)
+    chat_url = _to_chat_completions_url(target)
+    rendered_curl = (final_curl or "").strip() or _build_llm_probe_curl(chat_url, api_key, payload)
+    transport_mode = _probe_transport_mode()
+    if transport_mode in {"httpx", "python", "python_http"}:
+        result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+    elif transport_mode == "curl":
+        result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
+        result.setdefault("probe_transport", "curl")
+    elif shutil.which("curl"):
+        result = _run_curl_command_with_metrics(rendered_curl, timeout_sec, payload["stream"])
+        result.setdefault("probe_transport", "curl")
+        if _curl_probe_needs_python_fallback(result):
+            result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+            result["message"] = f"curl不可用，已使用Python HTTP备选路径: {result.get('message') or ''}"
+    else:
+        result = _run_llm_probe_via_python_http(chat_url, api_key, payload, timeout_sec, payload["stream"])
+    result["probe_transport_mode"] = transport_mode
+    result["chat_url"] = chat_url
     result["final_curl"] = rendered_curl
     if trigger:
         _add_probe_record(

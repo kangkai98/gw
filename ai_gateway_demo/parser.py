@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,9 +11,14 @@ from pathlib import Path
 from typing import Iterable
 
 from scapy.all import IP, TCP, Raw, rdpcap
+from scapy.utils import RawPcapReader
 
+# Runtime-tunable parser settings. Defaults are kept here, but effective
+# values are loaded from config/parser_config.json (or AI_GATEWAY_PARSER_CONFIG)
+# so Nuitka/PyInstaller builds can be tuned without rebuilding.
 TOKEN_LOG_ENABLE = True
 TOKEN_LOG_PATH = os.path.join("uploads", "token_calc.log")
+PARSER_CONFIG_PATH = os.path.join("config", "parser_config.json")
 
 TOKEN_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
 THIRD_PARTY_RULES: dict[str, tuple[str, ...]] = {
@@ -41,7 +48,6 @@ SEGMENT_MERGE_GAP_SEC = 2.0
 GO_LEN_MAX = 200
 
 
-
 @dataclass
 class PacketMeta:
     ts: float
@@ -57,7 +63,8 @@ class PacketMeta:
 
 
 def _append_token_log(line: str) -> None:
-    if not TOKEN_LOG_ENABLE:
+    config = get_parser_config()
+    if not config.token_log_enable:
         return
     try:
         os.makedirs(os.path.dirname(TOKEN_LOG_PATH), exist_ok=True)
@@ -190,6 +197,13 @@ def _has_token_payload(payload: str) -> bool:
 
 
 def extract_packets(pcap_path: Path) -> list[PacketMeta]:
+    raw_packets = _extract_packets_raw(pcap_path)
+    if raw_packets is not None:
+        return raw_packets
+    return _extract_packets_scapy(pcap_path)
+
+
+def _extract_packets_scapy(pcap_path: Path) -> list[PacketMeta]:
     packets = rdpcap(str(pcap_path))
     result: list[PacketMeta] = []
     for p in packets:
@@ -208,12 +222,90 @@ def extract_packets(pcap_path: Path) -> list[PacketMeta]:
                 payload=decode_payload(raw_bytes),
                 flow_key=f"{ip.src}:{tcp.sport}-{ip.dst}:{tcp.dport}",
                 raw=raw_bytes,
-                wire_len=int(len(p)),
+                wire_len=int(getattr(p, "wirelen", len(p)) or len(p)),
                 sni=_extract_tls_sni(raw_bytes),
             )
         )
     return sorted(result, key=lambda x: x.ts)
 
+
+def _extract_packets_raw(pcap_path: Path) -> list[PacketMeta] | None:
+    try:
+        reader = RawPcapReader(str(pcap_path))
+    except Exception:
+        return None
+    result: list[PacketMeta] = []
+    try:
+        if getattr(reader, "linktype", None) != 1:
+            return None
+        for raw_packet, meta in reader:
+            parsed = _extract_ipv4_tcp_meta_from_ethernet(raw_packet)
+            if parsed is None:
+                continue
+            src, sport, dst, dport, raw_bytes = parsed
+            result.append(
+                PacketMeta(
+                    ts=float(meta.sec) + float(meta.usec) / 1_000_000,
+                    src=src,
+                    dst=dst,
+                    sport=sport,
+                    dport=dport,
+                    payload=decode_payload(raw_bytes),
+                    flow_key=f"{src}:{sport}-{dst}:{dport}",
+                    raw=raw_bytes,
+                    wire_len=int(meta.wirelen),
+                    sni=_extract_tls_sni(raw_bytes),
+                )
+            )
+    except Exception:
+        return None
+    finally:
+        try:
+            reader.close()
+        except Exception:
+            pass
+    return sorted(result, key=lambda x: x.ts)
+
+
+def _extract_ipv4_tcp_meta_from_ethernet(raw_packet: bytes) -> tuple[str, int, str, int, bytes] | None:
+    if len(raw_packet) < 14:
+        return None
+    eth_type = int.from_bytes(raw_packet[12:14], "big")
+    ip_offset = 14
+    while eth_type in (0x8100, 0x88A8, 0x9100):
+        if len(raw_packet) < ip_offset + 4:
+            return None
+        eth_type = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+        ip_offset += 4
+    if eth_type != 0x0800 or len(raw_packet) < ip_offset + 20:
+        return None
+    version_ihl = raw_packet[ip_offset]
+    if version_ihl >> 4 != 4:
+        return None
+    ihl = (version_ihl & 0x0F) * 4
+    if ihl < 20 or len(raw_packet) < ip_offset + ihl:
+        return None
+    total_len = int.from_bytes(raw_packet[ip_offset + 2 : ip_offset + 4], "big")
+    if total_len < ihl:
+        return None
+    if raw_packet[ip_offset + 9] != 6:
+        return None
+    fragment = int.from_bytes(raw_packet[ip_offset + 6 : ip_offset + 8], "big")
+    if fragment & 0x3FFF:
+        return None
+    tcp_offset = ip_offset + ihl
+    ip_end = min(len(raw_packet), ip_offset + total_len)
+    if ip_end < tcp_offset + 20:
+        return None
+    data_offset = (raw_packet[tcp_offset + 12] >> 4) * 4
+    if data_offset < 20 or ip_end < tcp_offset + data_offset:
+        return None
+    src = ".".join(str(part) for part in raw_packet[ip_offset + 12 : ip_offset + 16])
+    dst = ".".join(str(part) for part in raw_packet[ip_offset + 16 : ip_offset + 20])
+    sport = int.from_bytes(raw_packet[tcp_offset : tcp_offset + 2], "big")
+    dport = int.from_bytes(raw_packet[tcp_offset + 2 : tcp_offset + 4], "big")
+    payload = bytes(raw_packet[tcp_offset + data_offset : ip_end])
+    return src, sport, dst, dport, payload
 
 def group_bi_flows(pkts: Iterable[PacketMeta]) -> dict[str, list[PacketMeta]]:
     groups: dict[str, list[PacketMeta]] = defaultdict(list)
@@ -385,6 +477,7 @@ def _streaming_score(flow_items: list[PacketMeta], client_ip: str) -> float:
 
 
 def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[str, int, str, int] | None]:
+    config = get_parser_config()
     ordered = sorted(flow_items, key=lambda p: p.ts)
     go_tuple = _wsw_find_go_tuple(ordered)
     if not go_tuple:
@@ -412,7 +505,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
                     self.first_go_len = pkt_len
                 elif pkt_len != self.first_go_len:
                     self.go_len_all_same = False
-                if pkt_len >= GO_LEN_MAX:
+                if pkt_len >= config.go_len_max:
                     self.has_oversize_go = True
 
     runs: list[_Run] = []
@@ -443,7 +536,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
             and (not r.has_oversize_go)
             and r.go_len_all_same
             and (r.first_go_len is not None)
-            and (r.first_go_len < GO_LEN_MAX)
+            and (r.first_go_len < config.go_len_max)
         )
 
     hit_segments = 0
@@ -453,7 +546,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
     def _finalize_segment() -> None:
         nonlocal hit_segments, in_seg, seg_intervals, seg_go_packets
-        if in_seg and seg_go_packets >= MIN_GO_RUN and seg_intervals >= MIN_ROUNDTRIPS:
+        if in_seg and seg_go_packets >= config.min_go_run and seg_intervals >= config.min_roundtrips:
             hit_segments += 1
         in_seg = False
         seg_intervals = 0
@@ -491,15 +584,15 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
         if in_seg and last_good_end_ts is not None:
             gap_no_ret = float(left.pkts[0].ts) - float(last_good_end_ts)
-            if gap_no_ret > SEGMENT_MERGE_GAP_SEC:
+            if gap_no_ret > config.segment_merge_gap_sec:
                 _finalize_segment()
                 bad_streak = 0
                 last_good_end_ts = None
 
-        if mid.sum_len > RETURN_SUM_MAX:
+        if mid.sum_len > config.return_sum_max:
             if in_seg:
                 bad_streak += 1
-                if bad_streak > ALLOW_BAD_RET_BURSTS:
+                if bad_streak > config.allow_bad_ret_bursts:
                     _finalize_segment()
                     bad_streak = 0
                     last_good_end_ts = None
@@ -520,6 +613,7 @@ def _wsw_detect_hit_segments(flow_items: list[PacketMeta]) -> tuple[int, tuple[s
 
 
 def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[PacketMeta]], tuple[str, int, str, int] | None]:
+    config = get_parser_config()
     ordered = sorted(flow_items, key=lambda p: p.ts)
     go_tuple = _wsw_find_go_tuple(ordered)
     if not go_tuple:
@@ -547,7 +641,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
                     self.first_go_len = pkt_len
                 elif pkt_len != self.first_go_len:
                     self.go_len_all_same = False
-                if pkt_len >= GO_LEN_MAX:
+                if pkt_len >= config.go_len_max:
                     self.has_oversize_go = True
 
     runs: list[_Run] = []
@@ -575,7 +669,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
             and (not r.has_oversize_go)
             and r.go_len_all_same
             and (r.first_go_len is not None)
-            and (r.first_go_len < GO_LEN_MAX)
+            and (r.first_go_len < config.go_len_max)
         )
 
     segments: list[list[PacketMeta]] = []
@@ -587,7 +681,7 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
 
     def _finalize() -> None:
         nonlocal in_seg, seg_start_run, seg_end_run, seg_intervals, seg_go_packets
-        if in_seg and seg_go_packets >= MIN_GO_RUN and seg_intervals >= MIN_ROUNDTRIPS:
+        if in_seg and seg_go_packets >= config.min_go_run and seg_intervals >= config.min_roundtrips:
             pkts: list[PacketMeta] = []
             for r in runs[seg_start_run : seg_end_run + 1]:
                 pkts.extend(r.pkts)
@@ -630,15 +724,15 @@ def _wsw_extract_hit_segments(flow_items: list[PacketMeta]) -> tuple[list[list[P
 
         if in_seg and last_good_end_ts is not None:
             gap_no_ret = float(left.pkts[0].ts) - float(last_good_end_ts)
-            if gap_no_ret > SEGMENT_MERGE_GAP_SEC:
+            if gap_no_ret > config.segment_merge_gap_sec:
                 _finalize()
                 bad_streak = 0
                 last_good_end_ts = None
 
-        if mid.sum_len > RETURN_SUM_MAX:
+        if mid.sum_len > config.return_sum_max:
             if in_seg:
                 bad_streak += 1
-                if bad_streak > ALLOW_BAD_RET_BURSTS:
+                if bad_streak > config.allow_bad_ret_bursts:
                     _finalize()
                     bad_streak = 0
                     last_good_end_ts = None
@@ -830,7 +924,42 @@ def _infer_entry_flow_key(
     return f"{client_ip}:?-{server_ip}:?"
 
 
+
+
+totals: dict[str, int] = {
+    "uplink_total_bytes": 0,
+    "downlink_total_bytes": 0,
+    "uplink_ai_bytes": 0,
+    "downlink_ai_bytes": 0,
+}
+traffic_totals_lock = threading.Lock()
+
+
+def summarize_pcap_traffic(pcap_path: Path, self_hosted_configs: list[dict] | None = None) -> dict[str, int | str | None]:
+    """Return traffic totals collected during the preceding parse step.
+
+    The concrete traffic accounting is intentionally left to parse_pcap_to_entries() so
+    callers can parse a pcap once, then read the summary here without re-reading it.
+    Until that parser-side accounting is added, all traffic totals default to 0.
+    """
+    return {
+        "pcap_path": str(pcap_path),
+        "window_start_time": None,
+        "window_end_time": None,
+        "uplink_total_bytes": int(totals.get("uplink_total_bytes", 0) or 0),
+        "downlink_total_bytes": int(totals.get("downlink_total_bytes", 0) or 0),
+        "uplink_ai_bytes": int(totals.get("uplink_ai_bytes", 0) or 0),
+        "downlink_ai_bytes": int(totals.get("downlink_ai_bytes", 0) or 0),
+    }
+
+
 def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> list[dict]:
+    totals.update({
+        "uplink_total_bytes": 0,
+        "downlink_total_bytes": 0,
+        "uplink_ai_bytes": 0,
+        "downlink_ai_bytes": 0,
+    })
     packets = extract_packets(pcap_path)
     if not packets:
         return []
@@ -846,7 +975,7 @@ def parse_pcap_to_entries(pcap_path: Path, self_hosted_configs: list[dict]) -> l
     for flow_key, flow_packets, go_tuple in picked:
         segments, go_tuple2 = _wsw_extract_hit_segments(flow_packets)
         go_use = go_tuple2 or go_tuple
-        segments = _merge_adjacent_segments_by_gap(segments, flow_packets, gap_sec=SEGMENT_MERGE_GAP_SEC)
+        segments = _merge_adjacent_segments_by_gap(segments, flow_packets, gap_sec=config.segment_merge_gap_sec)
 
         client_ip, server_ip = infer_direction(flow_packets, go_tuple=go_use)
         server_endpoint = _infer_server_endpoint(flow_packets, client_ip, server_ip, go_use)
