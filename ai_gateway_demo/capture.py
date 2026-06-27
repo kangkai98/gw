@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from scapy.all import IP, TCP, PcapReader, wrpcap
 
+from .app_traffic import flush_app_traffic_observer, observe_pcap_app_traffic, reset_app_traffic_observer
 from .db import insert_entry, list_self_hosted
 from .parser import parse_pcap_to_entries
 
@@ -150,6 +151,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             self._capture_backend = backend
             now = _now_text()
@@ -227,6 +229,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -302,6 +305,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -378,6 +382,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -454,6 +459,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -530,6 +536,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -606,6 +613,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -640,6 +648,7 @@ class OnlineCaptureManager:
         thread = self._thread
         if thread and thread.is_alive():
             thread.join(timeout=5)
+        flush_app_traffic_observer()
         with self._lock:
             self._status.running = False
             self._status.message = "在线监听已停止"
@@ -703,6 +712,7 @@ class OnlineCaptureManager:
             self._status.current_file = None
             if self._status.message.startswith("正在采集"):
                 self._status.message = "在线监听已停止"
+        flush_app_traffic_observer()
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
@@ -771,6 +781,7 @@ class OnlineCaptureManager:
         packets: list[CachedTcpPacket] = []
         if file_path.exists():
             if file_path.stat().st_size > 0:
+                observe_pcap_app_traffic(file_path)
                 packets = _extract_cached_tcp_packets(file_path, start_seq=self._next_packet_seq)
                 self._next_packet_seq += len(packets)
                 for flow_key, flow_packets in _group_cached_flows(packets).items():

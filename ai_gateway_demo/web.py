@@ -19,12 +19,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .app_traffic import observe_pcap_app_traffic
 from .capture import OnlineCaptureManager
 from .db import (
     add_self_hosted,
     clear_entries,
     clear_self_hosted,
     delete_self_hosted,
+    get_app_traffic_stats,
     get_stats,
     init_db,
     insert_entry,
@@ -227,6 +229,15 @@ def api_stats(
     )
 
 
+@app.get("/api/app-traffic")
+def api_app_traffic(
+    app_name: str | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
+):
+    return get_app_traffic_stats(app_name=app_name, start_real=start_real, end_real=end_real)
+
+
 @app.post("/api/upload")
 async def api_upload(file: UploadFile = File(...)):
     filename = file.filename or "upload.pcap"
@@ -234,6 +245,7 @@ async def api_upload(file: UploadFile = File(...)):
     content = await file.read()
     local_file.write_bytes(content)
 
+    observe_pcap_app_traffic(local_file)
     configs = list_self_hosted()
     entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
     inserted = 0
@@ -483,6 +495,11 @@ def home(request: Request):
 @app.get("/config", response_class=HTMLResponse)
 def config_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "config"})
+
+
+@app.get("/app-traffic", response_class=HTMLResponse)
+def app_traffic_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "app_traffic"})
 
 
 @app.get("/records", response_class=HTMLResponse)
