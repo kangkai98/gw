@@ -17,8 +17,9 @@ from typing import Any, Callable
 from scapy.all import IP, TCP, PcapReader
 from scapy.utils import RawPcapReader, RawPcapWriter
 
-from .db import insert_entry, insert_traffic_summary, list_self_hosted
-from .parser import _extract_tls_sni, parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
+from .app_traffic import flush_app_traffic_observer, observe_pcap_app_traffic, reset_app_traffic_observer
+from .db import insert_entry, list_self_hosted
+from .parser import parse_pcap_to_entries
 
 CAPTURE_PATH = Path("captures")
 CAPTURE_PATH.mkdir(exist_ok=True)
@@ -246,7 +247,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             self._capture_backend = backend
             now = _now_text()
@@ -324,7 +325,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             self._run_started_at = time.time()
             now = _now_text()
@@ -401,7 +402,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -478,7 +479,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -555,7 +556,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -632,7 +633,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -709,7 +710,7 @@ class OnlineCaptureManager:
                 raise RuntimeError("在线监听已在运行")
             self._stop_event.clear()
             self._flow_cache.clear()
-            self._flow_third_party_cache.clear()
+            reset_app_traffic_observer()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -744,7 +745,8 @@ class OnlineCaptureManager:
             _terminate_process(proc)
         thread = self._thread
         if thread and thread.is_alive():
-            thread.join(timeout=8 if capture_mode == "windows" else 5)
+            thread.join(timeout=5)
+        flush_app_traffic_observer()
         with self._lock:
             self._status.running = False
             self._status.message = "在线监听已停止"
@@ -988,6 +990,7 @@ class OnlineCaptureManager:
                 self._status.pending_ready_files = 0
             if self._status.message.startswith("正在采集"):
                 self._status.message = "在线监听已停止"
+        flush_app_traffic_observer()
 
     def _start_continuous_capture(self, interface: str, interval_sec: int, bpf_filter: str, mode: str) -> subprocess.Popen[bytes]:
         if mode == "windows":
@@ -1221,6 +1224,7 @@ class OnlineCaptureManager:
         packets: list[CachedTcpPacket] = []
         if file_path.exists():
             if file_path.stat().st_size > 0:
+                observe_pcap_app_traffic(file_path)
                 packets = _extract_cached_tcp_packets(file_path, start_seq=self._next_packet_seq)
                 self._next_packet_seq += len(packets)
                 self._remember_third_party_sni_from_packets(packets)
