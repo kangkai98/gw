@@ -23,6 +23,24 @@ ENTRY_COLUMNS: dict[str, str] = {
     "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
 }
 
+APP_FLOW_COLUMNS: dict[str, str] = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "flow_uid": "TEXT NOT NULL UNIQUE",
+    "app_name": "TEXT NOT NULL",
+    "sni": "TEXT NOT NULL",
+    "flow_key": "TEXT NOT NULL",
+    "protocol": "TEXT NOT NULL DEFAULT 'TCP'",
+    "client_endpoint": "TEXT NOT NULL",
+    "server_endpoint": "TEXT NOT NULL",
+    "start_time_real": "TEXT NOT NULL",
+    "end_time_real": "TEXT NOT NULL",
+    "duration_sec": "REAL NOT NULL DEFAULT 0",
+    "uplink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "downlink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "peak_bps": "REAL NOT NULL DEFAULT 0",
+    "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+}
+
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -57,10 +75,26 @@ def _ensure_entry_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE entries ADD COLUMN {name} {ddl}")
 
 
+def _ensure_app_flow_schema(conn: sqlite3.Connection) -> None:
+    cols = conn.execute("PRAGMA table_info(app_flow_stats)").fetchall()
+    if not cols:
+        fields = ",\n                ".join(f"{name} {ddl}" for name, ddl in APP_FLOW_COLUMNS.items())
+        conn.execute(f"CREATE TABLE app_flow_stats ({fields})")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_flow_stats_flow_uid ON app_flow_stats(flow_uid)")
+        return
+
+    existing = {row[1] for row in cols}
+    for name, ddl in APP_FLOW_COLUMNS.items():
+        if name not in existing and "PRIMARY KEY" not in ddl and "UNIQUE" not in ddl:
+            conn.execute(f"ALTER TABLE app_flow_stats ADD COLUMN {name} {ddl}")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_app_flow_stats_flow_uid ON app_flow_stats(flow_uid)")
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         _ensure_entry_schema(conn)
+        _ensure_app_flow_schema(conn)
         _ensure_self_hosted_schema(conn)
         conn.commit()
     finally:
@@ -130,8 +164,133 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         conn.execute("DELETE FROM entries")
+        conn.execute("DELETE FROM app_flow_stats")
         _reset_autoincrement(conn, "entries")
+        _reset_autoincrement(conn, "app_flow_stats")
         conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_app_flow_stat(flow: dict[str, Any], db_path: Path = DB_PATH) -> None:
+    conn = get_conn(db_path)
+    try:
+        conn.execute(
+            """
+            INSERT INTO app_flow_stats (
+                flow_uid, app_name, sni, flow_key, protocol, client_endpoint, server_endpoint,
+                start_time_real, end_time_real, duration_sec,
+                uplink_bytes, downlink_bytes, peak_bps
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(flow_uid) DO UPDATE SET
+                app_name = excluded.app_name,
+                sni = excluded.sni,
+                protocol = excluded.protocol,
+                client_endpoint = excluded.client_endpoint,
+                server_endpoint = excluded.server_endpoint,
+                start_time_real = excluded.start_time_real,
+                end_time_real = excluded.end_time_real,
+                duration_sec = excluded.duration_sec,
+                uplink_bytes = excluded.uplink_bytes,
+                downlink_bytes = excluded.downlink_bytes,
+                peak_bps = excluded.peak_bps
+            """,
+            (
+                str(flow.get("flow_uid") or flow.get("flow_key") or ""),
+                str(flow.get("app_name") or ""),
+                str(flow.get("sni") or ""),
+                str(flow.get("flow_key") or ""),
+                str(flow.get("protocol") or "TCP"),
+                str(flow.get("client_endpoint") or ""),
+                str(flow.get("server_endpoint") or ""),
+                str(flow.get("start_time_real") or ""),
+                str(flow.get("end_time_real") or ""),
+                float(flow.get("duration_sec") or 0),
+                int(flow.get("uplink_bytes") or 0),
+                int(flow.get("downlink_bytes") or 0),
+                float(flow.get("peak_bps") or 0),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_app_traffic_stats(
+    app_name: str | None = None,
+    start_real: str | None = None,
+    end_real: str | None = None,
+    db_path: Path = DB_PATH,
+) -> dict[str, Any]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if app_name:
+        clauses.append("app_name = ?")
+        params.append(app_name)
+    if start_real:
+        clauses.append("end_time_real >= ?")
+        params.append(start_real)
+    if end_real:
+        clauses.append("start_time_real <= ?")
+        params.append(end_real)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    conn = get_conn(db_path)
+    try:
+        totals = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_flows,
+                COALESCE(SUM(uplink_bytes), 0) AS total_uplink_bytes,
+                COALESCE(SUM(downlink_bytes), 0) AS total_downlink_bytes,
+                COALESCE(MAX(peak_bps), 0) AS peak_bps
+            FROM app_flow_stats
+            {where}
+            """,
+            params,
+        ).fetchone()
+        by_app = conn.execute(
+            f"""
+            SELECT app_name, COUNT(*) AS flow_count,
+                   COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
+                   COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
+                   COALESCE(MAX(peak_bps), 0) AS peak_bps
+            FROM app_flow_stats
+            {where}
+            GROUP BY app_name
+            ORDER BY (COALESCE(SUM(uplink_bytes), 0) + COALESCE(SUM(downlink_bytes), 0)) DESC
+            """,
+            params,
+        ).fetchall()
+        trend = conn.execute(
+            f"""
+            SELECT substr(end_time_real, 1, 16) AS bucket,
+                   COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
+                   COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes
+            FROM app_flow_stats
+            {where}
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            params,
+        ).fetchall()
+        flows = conn.execute(
+            f"""
+            SELECT * FROM app_flow_stats
+            {where}
+            ORDER BY id DESC
+            LIMIT 500
+            """,
+            params,
+        ).fetchall()
+        return {
+            "total_flows": totals["total_flows"],
+            "total_uplink_bytes": totals["total_uplink_bytes"],
+            "total_downlink_bytes": totals["total_downlink_bytes"],
+            "peak_bps": totals["peak_bps"],
+            "by_app": [dict(row) for row in by_app],
+            "trend": [dict(row) for row in trend],
+            "flows": [dict(row) for row in flows],
+        }
     finally:
         conn.close()
 
