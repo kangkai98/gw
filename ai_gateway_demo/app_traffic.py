@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""SNI-based AI application traffic observation independent of parser.py."""
+
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
