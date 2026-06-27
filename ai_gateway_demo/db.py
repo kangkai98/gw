@@ -344,6 +344,18 @@ def list_entries(
         conn.close()
 
 
+
+def _build_traffic_filters(start_real: str | None = None, end_real: str | None = None) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if start_real:
+        clauses.append("COALESCE(window_end_time, window_start_time, created_at) >= ?")
+        params.append(start_real)
+    if end_real:
+        clauses.append("COALESCE(window_start_time, window_end_time, created_at) <= ?")
+        params.append(end_real)
+    return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
 def get_stats(
     category_major: str | None = None,
     category_minor: str | None = None,
@@ -392,12 +404,30 @@ def get_stats(
         duration = (max_end - min_start) if (min_start is not None and max_end is not None) else 0
         rps = (totals["total_entries"] / duration) if duration and duration > 0 else 0
 
+        traffic_where_sql, traffic_params = _build_traffic_filters(start_real, end_real)
+        traffic = conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(uplink_total_bytes), 0) AS total_uplink_bytes,
+                COALESCE(SUM(downlink_total_bytes), 0) AS total_downlink_bytes,
+                COALESCE(SUM(uplink_ai_bytes), 0) AS total_uplink_ai_bytes,
+                COALESCE(SUM(downlink_ai_bytes), 0) AS total_downlink_ai_bytes
+            FROM traffic_summaries
+            {traffic_where_sql}
+            """,
+            traffic_params,
+        ).fetchone()
+
         return {
             "total_entries": totals["total_entries"],
             "total_input_tokens": totals["total_input_tokens"],
             "total_output_tokens": totals["total_output_tokens"],
             "rps": round(rps, 1),
             "major_stats": [dict(row) for row in major_rows],
+            "total_uplink_bytes": traffic["total_uplink_bytes"],
+            "total_downlink_bytes": traffic["total_downlink_bytes"],
+            "total_uplink_ai_bytes": traffic["total_uplink_ai_bytes"],
+            "total_downlink_ai_bytes": traffic["total_downlink_ai_bytes"],
         }
     finally:
         conn.close()

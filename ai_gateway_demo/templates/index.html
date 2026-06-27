@@ -66,12 +66,16 @@
     <section class="cards cards-8 centered-cards">
       <article class="stat glass"><h3>总 Request 数</h3><p id="totalEntries">0</p><small>全部请求规模</small></article>
       <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p><small>实时请求速率</small></article>
-      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput">0</p><small>输入 token 总量</small></article>
-      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput">0</p><small>输出 token 总量</small></article>
+      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput" class="estimated-token-value">0</p><small>输入 token 总量</small></article>
+      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput" class="estimated-token-value">0</p><small>输出 token 总量</small></article>
       <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
       <article class="stat glass"><h3>平均 TTFT(ms)</h3><p id="avgTtft">0.0</p><small>首 token 平均耗时</small></article>
       <article class="stat glass"><h3>平均 TPOT(ms/token)</h3><p id="avgTpot">0.0</p><small>单 token 生成耗时</small></article>
       <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
+      <article class="stat glass"><h3>上行总流量</h3><p id="totalUplinkBytes">0 B</p><small>上传 + 在线累计</small></article>
+      <article class="stat glass"><h3>下行总流量</h3><p id="totalDownlinkBytes">0 B</p><small>上传 + 在线累计</small></article>
+      <article class="stat glass"><h3>上行 AI 流量</h3><p id="totalUplinkAiBytes">0 B</p><small>AI 流上行累计</small></article>
+      <article class="stat glass"><h3>下行 AI 流量</h3><p id="totalDownlinkAiBytes">0 B</p><small>AI 流下行累计</small></article>
     </section>
 
     <h3 class="row-tag">统计</h3>
@@ -129,12 +133,30 @@
         <h2>在线监听</h2>
         <p class="subtle">持续监听网卡流量，按周期读入 pcap，对 FIN/RST、空闲超时或超过最长缓存时长的流回溯识别入库，并自动清理 pcap。</p>
         <form id="captureForm" class="inline-config-form panel-content-gap">
-          <input aria-label="监听网卡" name="interface" value="Ethernet" placeholder="网卡名：Ethernet / 以太网 / 1" required />
-          <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="30" placeholder="采集周期(秒)" required />
-          <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="60" placeholder="空闲超时(秒)" required />
-          <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="180" placeholder="最长缓存(秒,0不限)" required />
-          <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="60" placeholder="pcap保留(秒,0删除)" required />
-          <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="过滤表达式：tcp / tcp port 443" class="capture-bpf" />
+          <label>
+            <div class="subtle">监听网卡</div>
+            <input aria-label="监听网卡" name="interface" value="WLAN" placeholder="网卡名：WLAN / Ethernet / 以太网 / 1" required />
+          </label>
+          <label>
+            <div class="subtle">采集周期（秒）</div>
+            <input aria-label="采集周期" name="interval_sec" type="number" min="5" step="1" value="15" placeholder="采集周期(秒)" required />
+          </label>
+          <label>
+            <div class="subtle">流空闲超时（秒）</div>
+            <input aria-label="流空闲超时" name="idle_timeout_sec" type="number" min="5" step="1" value="15" placeholder="空闲超时(秒)" required />
+          </label>
+          <label>
+            <div class="subtle">单流最长缓存（秒）</div>
+            <input aria-label="单流最长缓存" name="max_flow_duration_sec" type="number" min="0" step="1" value="90" placeholder="最长缓存(秒,0不限)" required />
+          </label>
+          <label>
+            <div class="subtle">pcap保留时长（秒）</div>
+            <input aria-label="pcap保留时长" name="pcap_retention_sec" type="number" min="0" step="1" value="0" placeholder="pcap保留(秒,0删除)" required />
+          </label>
+          <label>
+            <div class="subtle">BPF过滤表达式</div>
+            <input aria-label="BPF过滤表达式" name="bpf_filter" value="tcp" placeholder="过滤表达式：tcp / tcp port 443" class="capture-bpf" />
+          </label>
           <div class="actions capture-form-actions">
             <button aria-label="Linux开始在线监听" type="submit" name="capture_mode" value="linux">Linux开始监听</button>
             <button aria-label="Windows开始在线监听" type="submit" name="capture_mode" value="windows">Windows开始监听</button>
@@ -944,11 +966,14 @@
       const state = capture?.running ? '运行中' : '已停止';
       const lines = [
         `状态：${state}；${capture?.message || '未启动在线监听'}`,
-        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 60}s；idle：${capture?.idle_timeout_sec || 120}s；最长缓存：${capture?.max_flow_duration_sec ?? 300}s；过滤：${capture?.bpf_filter || 'tcp'}`,
+        `网卡：${capture?.interface || '-'}；周期：${capture?.interval_sec || 15}s；idle：${capture?.idle_timeout_sec || 15}s；最长缓存：${capture?.max_flow_duration_sec ?? 90}s；过滤：${capture?.bpf_filter || 'tcp'}`,
         `pcap保留：${capture?.pcap_retention_sec ?? 0}s；最近清理：${capture?.last_deleted_pcaps ?? 0} 个；累计清理：${capture?.total_deleted_pcaps ?? 0} 个`,
         `缓存：${capture?.cached_flows ?? 0} 个流 / ${capture?.cached_packets ?? 0} 个包；就绪流：${capture?.last_ready_flows ?? 0}`,
-        `最近窗口：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
-        `累计：${capture?.total_windows ?? 0} 个窗口 / ${capture?.total_inserted ?? 0} 条入库`,
+        `最近分析：${capture?.last_window_finished_at || '-'}；检测 ${capture?.last_detected ?? 0} 条 / 入库 ${capture?.last_inserted ?? 0} 条`,
+        `online文件：已采集 ${capture?.total_online_files ?? capture?.total_capture_windows ?? 0} 个 / 已分析 ${capture?.analyzed_online_files ?? capture?.total_windows ?? 0} 个 / 待分析 ${capture?.pending_online_files ?? capture?.pending_online_windows ?? 0} 个`,
+        `ready文件：已生成 ${capture?.total_ready_files ?? 0} 个 / 已分析 ${capture?.analyzed_ready_files ?? 0} 个 / 待分析 ${capture?.pending_ready_files ?? 0} 个`,
+        `上次分析文件：${capture?.last_analysis_file || '-'}；大小 ${bytes(capture?.last_analysis_file_size_bytes ?? 0)}；耗时 ${num2(capture?.last_analysis_duration_sec)}s`,
+        `累计：${capture?.total_inserted ?? 0} 条入库`,
       ];
       if (capture?.last_error) lines.push(`错误：${capture.last_error}`);
       $('captureStatus').textContent = lines.join('\n');
@@ -1041,6 +1066,10 @@
       if (has('totalInput')) $('totalInput').textContent = compact(stats.total_input_tokens);
       if (has('totalOutput')) $('totalOutput').textContent = compact(stats.total_output_tokens);
       if (has('rps')) $('rps').textContent = num1(stats.rps);
+      if (has('totalUplinkBytes')) $('totalUplinkBytes').textContent = bytes(stats.total_uplink_bytes);
+      if (has('totalDownlinkBytes')) $('totalDownlinkBytes').textContent = bytes(stats.total_downlink_bytes);
+      if (has('totalUplinkAiBytes')) $('totalUplinkAiBytes').textContent = bytes(stats.total_uplink_ai_bytes);
+      if (has('totalDownlinkAiBytes')) $('totalDownlinkAiBytes').textContent = bytes(stats.total_downlink_ai_bytes);
 
       if (has('entryTable')) {
         document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
@@ -1099,7 +1128,25 @@
     }
 
     if (has('pcapFile')) $('pcapFile').onchange = (e) => { $('fileName').textContent = e.target.files?.[0]?.name || ''; };
-    if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => { e.preventDefault(); const fd = new FormData(e.target); try { const data = await uploadWithProgress(fd); $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`; await refreshAll(); } catch (err) { $('status').textContent = `上传失败：${err.message || err}`; } finally { setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800); } };
+    if (has('uploadForm')) $('uploadForm').onsubmit = async (e) => {
+      e.preventDefault();
+      if (uploadBusy) return;
+      uploadBusy = true;
+      const submitBtn = e.target.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
+      const fd = new FormData(e.target);
+      try {
+        const data = await uploadWithProgress(fd);
+        $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`;
+        await refreshAll();
+      } catch (err) {
+        $('status').textContent = `上传失败：${err.message || err}`;
+      } finally {
+        uploadBusy = false;
+        if (submitBtn) submitBtn.disabled = false;
+        setTimeout(() => { if (has('uploadProgress')) $('uploadProgress').hidden = true; }, 800);
+      }
+    };
     if (has('clearEntries')) $('clearEntries').onclick = async () => { await fetch('/api/clear', { method: 'POST' }); $('status').textContent = '记录已清空并重置序号。'; await refreshAll(); };
     async function startCaptureByBackend(backend) {
       if (!has('captureForm')) return;
@@ -1190,13 +1237,14 @@
         const mode = String(fd.get('mode') || 'standard');
         const lines = [
           `触发方式: ${trigger}`,
+          `传输方式: ${data.probe_transport || '-'}`,
+          `传输模式: ${data.probe_transport_mode || '-'}`,
           `可用性: ${data.availability || (data.ok ? '可用' : '不可用')}`,
           `状态码: ${data.status_code ?? '-'}`,
           `Latency(ms): ${num1(data.latency_ms)}`,
         ];
         if (mode === 'stream') {
           lines.push(`TTFB(ms): ${num1(data.ttfb_ms)}`);
-          lines.push(`TTFT(ms): ${num1(data.ttft_ms)}`);
         }
         lines.push(`消息: ${data.message || '-'}`);
         if (data.response_text) lines.push(`响应片段: ${data.response_text}`);
@@ -1276,7 +1324,7 @@
         } catch (err) {
           console.error(err);
         }
-      }, 5000);
+      }, 15000);
 
     }
 
@@ -1340,7 +1388,7 @@
         } catch (err) {
           console.error(err);
         }
-      }, 10000);
+      }, 15000);
     }
   </script>
 </body>
