@@ -15,6 +15,7 @@
     <nav class="side-nav">
       <a href="/" class="{% if page == 'home' %}active{% endif %}">主页</a>
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">配置</a>
+      <a href="/ai-traffic" class="{% if page == 'ai_traffic' %}active{% endif %}">AI流量</a>
       <a href="/records" class="{% if page == 'records' %}active{% endif %}">详细记录</a>
       <a href="/probe" class="{% if page == 'probe' %}active{% endif %}">拨测</a>
     </nav>
@@ -28,7 +29,7 @@
       </div>
       <div class="hero-note">
         <span class="badge">Network-side AI Gateway</span>
-        <span class="hero-tip">页面分为主页、配置、详细记录、拨测四部分，便于按角色查看。</span>
+        <span class="hero-tip">页面分为主页、配置、AI流量、详细记录、拨测，便于按角色查看。</span>
       </div>
     </header>
 
@@ -123,6 +124,77 @@
         <div class="panel-head"><h2>TPOT 趋势</h2><span class="subtle">按分钟平均</span></div>
         <canvas id="tpotTrend"></canvas>
       </section>
+    </section>
+    {% endif %}
+
+    {% if page == 'ai_traffic' %}
+    <section class="glass panel filter-panel">
+      <div class="panel-head">
+        <div>
+          <h2>AI 应用流量筛选</h2>
+          <span class="subtle">按 SNI 命中豆包、千问、DeepSeek、ChatGPT 的 TCP 流，统计上下行流量与峰值速率。</span>
+        </div>
+      </div>
+      <form id="aiTrafficFilterForm" class="query-form">
+        <label class="filter-item">
+          <span>AI应用</span>
+          <select id="aiTrafficApp" aria-label="AI应用">
+            <option value="">全部应用</option>
+            <option value="豆包">豆包</option>
+            <option value="千问">千问</option>
+            <option value="DeepSeek">DeepSeek</option>
+            <option value="ChatGPT">ChatGPT</option>
+          </select>
+        </label>
+        <label class="filter-item">
+          <span>用户IP</span>
+          <input id="aiTrafficUserIp" placeholder="如 10.136.136.222" />
+        </label>
+        <div class="actions">
+          <button type="submit">应用筛选</button>
+          <button id="resetAiTrafficFilter" type="button" class="ghost-btn">重置</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="cards cards-8 centered-cards">
+      <article class="stat glass"><h3>总上行流量</h3><p id="aiTrafficTotalUp">0 B</p><small>当前筛选范围</small></article>
+      <article class="stat glass"><h3>总下行流量</h3><p id="aiTrafficTotalDown">0 B</p><small>当前筛选范围</small></article>
+      <article class="stat glass"><h3>AI上行流量</h3><p id="aiTrafficAiUp">0 B</p><small>SNI命中应用</small></article>
+      <article class="stat glass"><h3>AI下行流量</h3><p id="aiTrafficAiDown">0 B</p><small>SNI命中应用</small></article>
+      <article class="stat glass"><h3>AI流数</h3><p id="aiTrafficFlowCount">0</p><small>按五元组聚合</small></article>
+      <article class="stat glass"><h3>用户数</h3><p id="aiTrafficUserCount">0</p><small>去重用户IP</small></article>
+      <article class="stat glass"><h3>上行峰值速率</h3><p id="aiTrafficUplinkPeakRate">0 bps</p><small>整体1秒桶峰值</small></article>
+      <article class="stat glass"><h3>下行峰值速率</h3><p id="aiTrafficDownlinkPeakRate">0 bps</p><small>整体1秒桶峰值</small></article>
+    </section>
+
+    <section class="grid-two charts-gap">
+      <section class="glass panel chart-panel">
+        <div class="panel-head"><h2>流量趋势</h2><span class="subtle">按分钟聚合上下行与AI总流量</span></div>
+        <canvas id="aiTrafficTrend"></canvas>
+      </section>
+      <section class="glass panel chart-panel chart-panel-pie">
+        <div class="panel-head"><h2>应用分布</h2><span class="subtle">按AI流量总字节</span></div>
+        <canvas id="aiTrafficAppPie"></canvas>
+      </section>
+    </section>
+
+    <section class="glass panel" id="aiTrafficRecords">
+      <div class="panel-head">
+        <h2>AI流明细</h2>
+        <span class="subtle">只展示 SNI 命中的应用流，最多返回最近 500 条。</span>
+      </div>
+      <div class="table-scroll ai-flow-scroll">
+        <table id="aiFlowTable">
+          <thead>
+            <tr>
+              <th>ID</th><th>应用</th><th>SNI</th><th>五元组</th><th>用户</th><th>服务端</th>
+              <th>上行</th><th>下行</th><th>总量</th><th>持续时间</th><th>开始时间</th><th>结束时间</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
     {% endif %}
 
@@ -429,6 +501,15 @@
       while (value >= 1024 && idx < units.length - 1) { value /= 1024; idx += 1; }
       return `${idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`;
     };
+    const bps = (v) => {
+      const n = Number(v || 0);
+      if (!Number.isFinite(n)) return '-';
+      const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+      let value = Math.max(0, n);
+      let idx = 0;
+      while (value >= 1000 && idx < units.length - 1) { value /= 1000; idx += 1; }
+      return `${idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`;
+    };
 
     function $(id) { return document.getElementById(id); }
     function has(id) { return !!$(id); }
@@ -675,6 +756,104 @@
         ...extra,
       };
     }
+
+    function destroyChartKeys(keys) {
+      keys.forEach((key) => {
+        charts[key]?.destroy?.();
+        delete charts[key];
+      });
+    }
+
+    function aiTrafficQueryString() {
+      if (!has('aiTrafficFilterForm')) return '';
+      const q = new URLSearchParams();
+      const app = $('aiTrafficApp').value;
+      const userIp = $('aiTrafficUserIp').value.trim();
+      if (app) q.set('app', app);
+      if (userIp) q.set('user_ip', userIp);
+      const qs = q.toString();
+      return qs ? `?${qs}` : '';
+    }
+
+    function renderAiTraffic(summary, flows) {
+      if (has('aiTrafficTotalUp')) $('aiTrafficTotalUp').textContent = bytes(summary.total_uplink_bytes);
+      if (has('aiTrafficTotalDown')) $('aiTrafficTotalDown').textContent = bytes(summary.total_downlink_bytes);
+      if (has('aiTrafficAiUp')) $('aiTrafficAiUp').textContent = bytes(summary.total_uplink_ai_bytes);
+      if (has('aiTrafficAiDown')) $('aiTrafficAiDown').textContent = bytes(summary.total_downlink_ai_bytes);
+      if (has('aiTrafficFlowCount')) $('aiTrafficFlowCount').textContent = compact(summary.total_flows);
+      if (has('aiTrafficUserCount')) $('aiTrafficUserCount').textContent = compact(summary.total_users);
+      if (has('aiTrafficUplinkPeakRate')) $('aiTrafficUplinkPeakRate').textContent = bps(summary.uplink_peak_bps);
+      if (has('aiTrafficDownlinkPeakRate')) $('aiTrafficDownlinkPeakRate').textContent = bps(summary.downlink_peak_bps);
+
+      destroyChartKeys(['aiTrafficTrend', 'aiTrafficAppPie']);
+      const trend = summary.trend || [];
+      if (has('aiTrafficTrend')) {
+        charts.aiTrafficTrend = new Chart($('aiTrafficTrend'), {
+          type: 'line',
+          data: {
+            labels: trend.map(i => i.label),
+            datasets: [
+              { label: '上行', data: trend.map(i => i.uplink_bytes || 0), borderColor: '#7aa2ff', backgroundColor: 'rgba(122,162,255,.12)', fill: true, pointRadius: 2, tension: 0.28 },
+              { label: '下行', data: trend.map(i => i.downlink_bytes || 0), borderColor: '#67d4b6', backgroundColor: 'rgba(103,212,182,.12)', fill: true, pointRadius: 2, tension: 0.28 },
+              { label: 'AI总量', data: trend.map(i => i.total_bytes || 0), borderColor: '#ffc56e', backgroundColor: 'rgba(255,197,110,.10)', fill: false, pointRadius: 2, tension: 0.28 },
+            ],
+          },
+          options: chartOptions({
+            plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${bytes(ctx.raw)}` } } },
+            scales: { y: { beginAtZero: true, ticks: { callback: (value) => bytes(value), color: '#55647f' }, grid: { color: 'rgba(86,112,159,.10)' } } },
+          }),
+        });
+      }
+      const appStats = summary.app_stats || [];
+      if (has('aiTrafficAppPie')) {
+        charts.aiTrafficAppPie = new Chart($('aiTrafficAppPie'), {
+          type: 'doughnut',
+          data: {
+            labels: appStats.map(i => i.app),
+            datasets: [{ data: appStats.map(i => i.total_bytes || 0), backgroundColor: palette, borderWidth: 0, hoverOffset: 10 }],
+          },
+          options: chartOptions({
+            cutout: '62%',
+            aspectRatio: 1,
+            scales: {},
+            plugins: { tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${bytes(ctx.raw)}` } } },
+          }),
+        });
+      }
+
+      if (has('aiFlowTable')) {
+        const tbody = $('aiFlowTable').querySelector('tbody');
+        tbody.innerHTML = (flows || []).map(flow => `
+          <tr>
+            <td>${esc(flow.id)}</td>
+            <td>${esc(flow.app)}</td>
+            <td>${esc(flow.sni)}</td>
+            <td>${esc(flow.protocol || 'TCP')} | ${esc(flow.flow_key)}</td>
+            <td>${esc(flow.user_ip)}:${esc(flow.user_port)}</td>
+            <td>${esc(flow.server_ip)}:${esc(flow.server_port)}</td>
+            <td>${bytes(flow.uplink_bytes)}</td>
+            <td>${bytes(flow.downlink_bytes)}</td>
+            <td>${bytes(flow.total_bytes)}</td>
+            <td>${num2(flow.duration_sec)}s</td>
+            <td>${esc(flow.start_time_real)}</td>
+            <td>${esc(flow.end_time_real)}</td>
+          </tr>
+        `).join('') || '<tr><td colspan="12" class="subtle">暂无符合四类 AI 应用 SNI 的流量记录</td></tr>';
+      }
+    }
+
+    async function refreshAiTraffic() {
+      if (!has('aiTrafficFilterForm')) return;
+      const qs = aiTrafficQueryString();
+      const [summaryResp, flowsResp] = await Promise.all([
+        fetch(`/api/ai-traffic/summary${qs}`),
+        fetch(`/api/ai-traffic/flows${qs}`),
+      ]);
+      const summary = await summaryResp.json();
+      const flows = (await flowsResp.json()).items || [];
+      renderAiTraffic(summary, flows);
+    }
+
     function shortLabel(text, max = 12) { const s = String(text || ''); return s.length > max ? `${s.slice(0, max)}…` : s; }
 
     function buildDerived(entries) {
@@ -990,7 +1169,7 @@
       const fd = new FormData(e.target);
       try {
         const data = await uploadWithProgress(fd);
-        $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request。`;
+        $('status').textContent = `已写入 ${data.inserted ?? 0} 条 request，AI流 ${data.ai_flows_inserted ?? 0} 条。`;
         await refreshAll();
       } catch (err) {
         $('status').textContent = `上传失败：${err.message || err}`;
@@ -1189,6 +1368,15 @@
       queryRun();
     }
 
+    if (has('aiTrafficFilterForm')) {
+      $('aiTrafficFilterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAiTraffic(); };
+      if (has('resetAiTrafficFilter')) $('resetAiTrafficFilter').onclick = async () => {
+        $('aiTrafficApp').value = '';
+        $('aiTrafficUserIp').value = '';
+        await refreshAiTraffic();
+      };
+    }
+
     if (has('healthCfgForm')) {
       const fillHealth = () => {
         const cfg = getHealthCfg();
@@ -1213,6 +1401,16 @@
     }
 
     renderTopology();
+    if ((document.body.dataset.page || '') === 'ai_traffic') {
+      refreshAiTraffic();
+      window.setInterval(async () => {
+        try {
+          await refreshAiTraffic();
+        } catch (err) {
+          console.error(err);
+        }
+      }, 15000);
+    }
     if (['home', 'config'].includes(document.body.dataset.page || '')) {
       refreshAll();
       window.setInterval(async () => {

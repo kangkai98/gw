@@ -139,6 +139,8 @@ button.warn { color: #fff; background: linear-gradient(180deg, #f1ba53, #dc9b21)
 .table-scroll { overflow: auto; max-height: 360px; border-radius: 16px; }
 #probeRecordTable { min-width: 1060px; }
 #probeTaskTable { min-width: 920px; }
+#aiFlowTable { min-width: 1320px; }
+.ai-flow-scroll { max-height: 520px; }
 .probe-chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
 .probe-task-chart { min-height: 300px; border: 1px solid rgba(86,112,159,.14); border-radius: 16px; background: rgba(255,255,255,.55); padding: 12px; }
 .probe-task-chart h3 { margin: 0 0 8px; font-size: 14px; color: #2d4778; }

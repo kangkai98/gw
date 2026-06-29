@@ -1,9 +1,10 @@
 {
-  "token_log_enable": true,
-  "min_go_run": 10,
-  "min_roundtrips": 30,
-  "return_sum_max": 1400,
-  "allow_bad_ret_bursts": 2,
-  "segment_merge_gap_sec": 2.0,
-  "go_len_max": 200
+  "TOKEN_LOG_ENABLE": true,
+  "TOKEN_LOG_PATH": "uploads/token_calc.log",
+  "MIN_GO_RUN": 10,
+  "MIN_ROUNDTRIPS": 30,
+  "RETURN_SUM_MAX": 1400,
+  "ALLOW_BAD_RET_BURSTS": 2,
+  "SEGMENT_MERGE_GAP_SEC": 2.0,
+  "GO_LEN_MAX": 200
 }

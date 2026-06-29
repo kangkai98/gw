@@ -36,6 +36,38 @@ TRAFFIC_SUMMARY_COLUMNS: dict[str, str] = {
     "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
 }
 
+AI_FLOW_RECORD_COLUMNS: dict[str, str] = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "source": "TEXT NOT NULL",
+    "pcap_path": "TEXT NOT NULL",
+    "app": "TEXT NOT NULL",
+    "sni": "TEXT NOT NULL",
+    "protocol": "TEXT NOT NULL DEFAULT 'TCP'",
+    "flow_key": "TEXT NOT NULL",
+    "user_ip": "TEXT NOT NULL",
+    "user_port": "INTEGER NOT NULL DEFAULT 0",
+    "server_ip": "TEXT NOT NULL",
+    "server_port": "INTEGER NOT NULL DEFAULT 0",
+    "uplink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "downlink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "total_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "peak_bps": "REAL NOT NULL DEFAULT 0",
+    "duration_sec": "REAL NOT NULL DEFAULT 0",
+    "start_time_real": "TEXT NOT NULL",
+    "end_time_real": "TEXT NOT NULL",
+    "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+}
+
+AI_TRAFFIC_RATE_BUCKET_COLUMNS: dict[str, str] = {
+    "id": "INTEGER PRIMARY KEY AUTOINCREMENT",
+    "bucket_time": "TEXT NOT NULL",
+    "app": "TEXT NOT NULL",
+    "user_ip": "TEXT NOT NULL",
+    "uplink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "downlink_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "created_at": "DATETIME DEFAULT CURRENT_TIMESTAMP",
+}
+
 
 def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -83,11 +115,51 @@ def _ensure_traffic_summary_schema(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE traffic_summaries ADD COLUMN {name} {ddl}")
 
 
+def _ensure_ai_flow_record_schema(conn: sqlite3.Connection) -> None:
+    cols = conn.execute("PRAGMA table_info(ai_flow_records)").fetchall()
+    if not cols:
+        fields = ",\n                ".join(f"{name} {ddl}" for name, ddl in AI_FLOW_RECORD_COLUMNS.items())
+        conn.execute(f"CREATE TABLE ai_flow_records ({fields})")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_app ON ai_flow_records(app)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_user ON ai_flow_records(user_ip)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_start ON ai_flow_records(start_time_real)")
+        return
+
+    existing = {row[1] for row in cols}
+    for name, ddl in AI_FLOW_RECORD_COLUMNS.items():
+        if name not in existing and "PRIMARY KEY" not in ddl:
+            conn.execute(f"ALTER TABLE ai_flow_records ADD COLUMN {name} {ddl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_app ON ai_flow_records(app)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_user ON ai_flow_records(user_ip)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_flow_start ON ai_flow_records(start_time_real)")
+
+
+def _ensure_ai_traffic_rate_bucket_schema(conn: sqlite3.Connection) -> None:
+    cols = conn.execute("PRAGMA table_info(ai_traffic_rate_buckets)").fetchall()
+    if not cols:
+        fields = ",\n                ".join(f"{name} {ddl}" for name, ddl in AI_TRAFFIC_RATE_BUCKET_COLUMNS.items())
+        conn.execute(f"CREATE TABLE ai_traffic_rate_buckets ({fields})")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_time ON ai_traffic_rate_buckets(bucket_time)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_app ON ai_traffic_rate_buckets(app)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_user ON ai_traffic_rate_buckets(user_ip)")
+        return
+
+    existing = {row[1] for row in cols}
+    for name, ddl in AI_TRAFFIC_RATE_BUCKET_COLUMNS.items():
+        if name not in existing and "PRIMARY KEY" not in ddl:
+            conn.execute(f"ALTER TABLE ai_traffic_rate_buckets ADD COLUMN {name} {ddl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_time ON ai_traffic_rate_buckets(bucket_time)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_app ON ai_traffic_rate_buckets(app)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_rate_bucket_user ON ai_traffic_rate_buckets(user_ip)")
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     conn = get_conn(db_path)
     try:
         _ensure_entry_schema(conn)
         _ensure_traffic_summary_schema(conn)
+        _ensure_ai_flow_record_schema(conn)
+        _ensure_ai_traffic_rate_bucket_schema(conn)
         _ensure_self_hosted_schema(conn)
         conn.commit()
     finally:
@@ -158,8 +230,12 @@ def clear_entries(db_path: Path = DB_PATH) -> None:
     try:
         conn.execute("DELETE FROM entries")
         conn.execute("DELETE FROM traffic_summaries")
+        conn.execute("DELETE FROM ai_flow_records")
+        conn.execute("DELETE FROM ai_traffic_rate_buckets")
         _reset_autoincrement(conn, "entries")
         _reset_autoincrement(conn, "traffic_summaries")
+        _reset_autoincrement(conn, "ai_flow_records")
+        _reset_autoincrement(conn, "ai_traffic_rate_buckets")
         conn.commit()
     finally:
         conn.close()
@@ -187,6 +263,77 @@ def insert_traffic_summary(summary: dict[str, Any], db_path: Path = DB_PATH) -> 
             ),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_ai_flow_records(records: list[dict[str, Any]], db_path: Path = DB_PATH) -> int:
+    if not records:
+        return 0
+    conn = get_conn(db_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO ai_flow_records (
+                source, pcap_path, app, sni, protocol, flow_key,
+                user_ip, user_port, server_ip, server_port,
+                uplink_bytes, downlink_bytes, total_bytes, peak_bps, duration_sec,
+                start_time_real, end_time_real
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    record.get("source") or "unknown",
+                    record.get("pcap_path") or "",
+                    record.get("app") or "",
+                    record.get("sni") or "",
+                    record.get("protocol") or "TCP",
+                    record.get("flow_key") or "",
+                    record.get("user_ip") or "",
+                    int(record.get("user_port") or 0),
+                    record.get("server_ip") or "",
+                    int(record.get("server_port") or 0),
+                    int(record.get("uplink_bytes") or 0),
+                    int(record.get("downlink_bytes") or 0),
+                    int(record.get("total_bytes") or 0),
+                    float(record.get("peak_bps") or 0),
+                    float(record.get("duration_sec") or 0),
+                    record.get("start_time_real") or "",
+                    record.get("end_time_real") or "",
+                )
+                for record in records
+            ],
+        )
+        conn.commit()
+        return len(records)
+    finally:
+        conn.close()
+
+
+def insert_ai_traffic_rate_buckets(buckets: list[dict[str, Any]], db_path: Path = DB_PATH) -> int:
+    if not buckets:
+        return 0
+    conn = get_conn(db_path)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO ai_traffic_rate_buckets (
+                bucket_time, app, user_ip, uplink_bytes, downlink_bytes
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    bucket.get("bucket_time") or "",
+                    bucket.get("app") or "",
+                    bucket.get("user_ip") or "",
+                    int(bucket.get("uplink_bytes") or 0),
+                    int(bucket.get("downlink_bytes") or 0),
+                )
+                for bucket in buckets
+            ],
+        )
+        conn.commit()
+        return len(buckets)
     finally:
         conn.close()
 
@@ -251,6 +398,182 @@ def _build_traffic_filters(start_real: str | None = None, end_real: str | None =
         clauses.append("COALESCE(window_start_time, window_end_time, created_at) <= ?")
         params.append(end_real)
     return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
+
+def _build_ai_flow_filters(
+    app: str | None = None,
+    user_ip: str | None = None,
+    start_real: str | None = None,
+    end_real: str | None = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if app:
+        clauses.append("app = ?")
+        params.append(app)
+    if user_ip:
+        clauses.append("user_ip LIKE ?")
+        params.append(f"%{user_ip}%")
+    if start_real:
+        clauses.append("end_time_real >= ?")
+        params.append(start_real)
+    if end_real:
+        clauses.append("start_time_real <= ?")
+        params.append(end_real)
+    return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
+
+def _build_ai_rate_bucket_filters(
+    app: str | None = None,
+    user_ip: str | None = None,
+    start_real: str | None = None,
+    end_real: str | None = None,
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if app:
+        clauses.append("app = ?")
+        params.append(app)
+    if user_ip:
+        clauses.append("user_ip LIKE ?")
+        params.append(f"%{user_ip}%")
+    if start_real:
+        clauses.append("bucket_time >= ?")
+        params.append(start_real)
+    if end_real:
+        clauses.append("bucket_time <= ?")
+        params.append(end_real)
+    return ("WHERE " + " AND ".join(clauses), params) if clauses else ("", params)
+
+
+def list_ai_flow_records(
+    app: str | None = None,
+    user_ip: str | None = None,
+    start_real: str | None = None,
+    end_real: str | None = None,
+    limit: int = 500,
+    db_path: Path = DB_PATH,
+) -> list[dict[str, Any]]:
+    conn = get_conn(db_path)
+    try:
+        where_sql, params = _build_ai_flow_filters(app=app, user_ip=user_ip, start_real=start_real, end_real=end_real)
+        rows = conn.execute(
+            f"SELECT * FROM ai_flow_records {where_sql} ORDER BY start_time_real DESC, id DESC LIMIT ?",
+            [*params, max(1, min(int(limit or 500), 5000))],
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def get_ai_traffic_summary(
+    app: str | None = None,
+    user_ip: str | None = None,
+    start_real: str | None = None,
+    end_real: str | None = None,
+    db_path: Path = DB_PATH,
+) -> dict[str, Any]:
+    conn = get_conn(db_path)
+    try:
+        where_sql, params = _build_ai_flow_filters(app=app, user_ip=user_ip, start_real=start_real, end_real=end_real)
+        rate_where_sql, rate_params = _build_ai_rate_bucket_filters(app=app, user_ip=user_ip, start_real=start_real, end_real=end_real)
+        totals = conn.execute(
+            f"""
+            SELECT
+                COUNT(*) AS total_flows,
+                COUNT(DISTINCT user_ip) AS total_users,
+                COALESCE(SUM(uplink_bytes), 0) AS total_uplink_ai_bytes,
+                COALESCE(SUM(downlink_bytes), 0) AS total_downlink_ai_bytes,
+                COALESCE(SUM(total_bytes), 0) AS total_ai_bytes,
+                COALESCE(AVG(duration_sec), 0) AS avg_duration_sec
+            FROM ai_flow_records
+            {where_sql}
+            """,
+            params,
+        ).fetchone()
+        app_rows = conn.execute(
+            f"""
+            SELECT
+                app,
+                COUNT(*) AS flow_count,
+                COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
+                COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
+                COALESCE(SUM(total_bytes), 0) AS total_bytes
+            FROM ai_flow_records
+            {where_sql}
+            GROUP BY app
+            ORDER BY total_bytes DESC
+            """,
+            params,
+        ).fetchall()
+        peak = conn.execute(
+            f"""
+            SELECT
+                COALESCE(MAX(uplink_sum), 0) * 8 AS uplink_peak_bps,
+                COALESCE(MAX(downlink_sum), 0) * 8 AS downlink_peak_bps
+            FROM (
+                SELECT
+                    bucket_time,
+                    COALESCE(SUM(uplink_bytes), 0) AS uplink_sum,
+                    COALESCE(SUM(downlink_bytes), 0) AS downlink_sum
+                FROM ai_traffic_rate_buckets
+                {rate_where_sql}
+                GROUP BY bucket_time
+            )
+            """,
+            rate_params,
+        ).fetchone()
+        trend_rows = conn.execute(
+            f"""
+            SELECT
+                substr(start_time_real, 1, 16) AS label,
+                COUNT(*) AS flow_count,
+                COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
+                COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
+                COALESCE(SUM(total_bytes), 0) AS total_bytes
+            FROM ai_flow_records
+            {where_sql}
+            GROUP BY label
+            ORDER BY label ASC
+            """,
+            params,
+        ).fetchall()
+
+        total_uplink = int(totals["total_uplink_ai_bytes"] or 0)
+        total_downlink = int(totals["total_downlink_ai_bytes"] or 0)
+        if not app and not user_ip:
+            traffic_where_sql, traffic_params = _build_traffic_filters(start_real, end_real)
+            traffic = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(uplink_total_bytes), 0) AS total_uplink_bytes,
+                    COALESCE(SUM(downlink_total_bytes), 0) AS total_downlink_bytes
+                FROM traffic_summaries
+                {traffic_where_sql}
+                """,
+                traffic_params,
+            ).fetchone()
+            total_uplink = int(traffic["total_uplink_bytes"] or 0)
+            total_downlink = int(traffic["total_downlink_bytes"] or 0)
+
+        return {
+            "total_flows": int(totals["total_flows"] or 0),
+            "total_users": int(totals["total_users"] or 0),
+            "total_uplink_bytes": total_uplink,
+            "total_downlink_bytes": total_downlink,
+            "total_uplink_ai_bytes": int(totals["total_uplink_ai_bytes"] or 0),
+            "total_downlink_ai_bytes": int(totals["total_downlink_ai_bytes"] or 0),
+            "total_ai_bytes": int(totals["total_ai_bytes"] or 0),
+            "uplink_peak_bps": float(peak["uplink_peak_bps"] or 0),
+            "downlink_peak_bps": float(peak["downlink_peak_bps"] or 0),
+            "max_peak_bps": max(float(peak["uplink_peak_bps"] or 0), float(peak["downlink_peak_bps"] or 0)),
+            "avg_duration_sec": float(totals["avg_duration_sec"] or 0),
+            "app_stats": [dict(row) for row in app_rows],
+            "trend": [dict(row) for row in trend_rows],
+        }
+    finally:
+        conn.close()
+
 
 def get_stats(
     category_major: str | None = None,

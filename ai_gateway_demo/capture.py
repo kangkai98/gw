@@ -17,7 +17,8 @@ from typing import Any, Callable
 from scapy.all import IP, TCP, PcapReader
 from scapy.utils import RawPcapReader, RawPcapWriter
 
-from .db import insert_entry, insert_traffic_summary, list_self_hosted
+from .ai_traffic import analyze_ai_traffic_pcap, summarize_parser_detected_ai_traffic
+from .db import insert_ai_flow_records, insert_ai_traffic_rate_buckets, insert_entry, insert_traffic_summary, list_self_hosted
 from .parser import _extract_tls_sni, parse_pcap_to_entries, summarize_pcap_traffic, traffic_totals_lock
 
 CAPTURE_PATH = Path("captures")
@@ -1065,7 +1066,11 @@ class OnlineCaptureManager:
         analysis_started = time.perf_counter()
         configs = list_self_hosted()
         entries, traffic_summary = _parse_ready_pcap_in_process(analyzed_pcap, configs, self._stop_event)
-        insert_traffic_summary({**traffic_summary, "source": "online"})
+        ai_flow_records, ai_traffic_summary, ai_rate_buckets = analyze_ai_traffic_pcap(analyzed_pcap, source="online")
+        parser_ai_traffic = summarize_parser_detected_ai_traffic(analyzed_pcap, entries)
+        insert_traffic_summary({**traffic_summary, **ai_traffic_summary, **parser_ai_traffic, "source": "online"})
+        insert_ai_flow_records(ai_flow_records)
+        insert_ai_traffic_rate_buckets(ai_rate_buckets)
         inserted = 0
         self._expire_flow_third_party_cache()
         for entry in entries:

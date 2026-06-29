@@ -23,16 +23,21 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .ai_traffic import analyze_ai_traffic_pcap, summarize_parser_detected_ai_traffic
 from .capture import OnlineCaptureManager
 from .db import (
     add_self_hosted,
     clear_entries,
     clear_self_hosted,
     delete_self_hosted,
+    get_ai_traffic_summary,
     get_stats,
     init_db,
+    insert_ai_flow_records,
+    insert_ai_traffic_rate_buckets,
     insert_entry,
     insert_traffic_summary,
+    list_ai_flow_records,
     list_entries,
     list_self_hosted,
     refresh_entry_categories_by_self_hosted,
@@ -252,7 +257,11 @@ async def api_upload(file: UploadFile = File(...)):
     with traffic_totals_lock:
         entries = parse_pcap_to_entries(local_file, self_hosted_configs=configs)
         traffic_summary = summarize_pcap_traffic(local_file, self_hosted_configs=configs)
-        insert_traffic_summary({**traffic_summary, "source": "upload"})
+    ai_flow_records, ai_traffic_summary, ai_rate_buckets = analyze_ai_traffic_pcap(local_file, source="upload")
+    parser_ai_traffic = summarize_parser_detected_ai_traffic(local_file, entries)
+    insert_traffic_summary({**traffic_summary, **ai_traffic_summary, **parser_ai_traffic, "source": "upload"})
+    ai_flows_inserted = insert_ai_flow_records(ai_flow_records)
+    insert_ai_traffic_rate_buckets(ai_rate_buckets)
     inserted = 0
     for e in entries:
         if insert_entry(e):
@@ -261,7 +270,36 @@ async def api_upload(file: UploadFile = File(...)):
             if latest:
                 _maybe_trigger_follow_for_entry(latest[0])
 
-    return {"inserted": inserted, "detected": len(entries)}
+    return {"inserted": inserted, "detected": len(entries), "ai_flows_inserted": ai_flows_inserted}
+
+
+@app.get("/api/ai-traffic/summary")
+def api_ai_traffic_summary(
+    app: str | None = Query(default=None),
+    user_ip: str | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
+):
+    return get_ai_traffic_summary(app=app, user_ip=user_ip, start_real=start_real, end_real=end_real)
+
+
+@app.get("/api/ai-traffic/flows")
+def api_ai_traffic_flows(
+    app: str | None = Query(default=None),
+    user_ip: str | None = Query(default=None),
+    start_real: str | None = Query(default=None),
+    end_real: str | None = Query(default=None),
+    limit: int = Query(default=500),
+):
+    return {
+        "items": list_ai_flow_records(
+            app=app,
+            user_ip=user_ip,
+            start_real=start_real,
+            end_real=end_real,
+            limit=limit,
+        )
+    }
 
 
 @app.post("/api/clear")
@@ -505,6 +543,11 @@ def config_page(request: Request):
 @app.get("/records", response_class=HTMLResponse)
 def records_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "records"})
+
+
+@app.get("/ai-traffic", response_class=HTMLResponse)
+def ai_traffic_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "ai_traffic"})
 
 
 @app.get("/query", response_class=HTMLResponse)

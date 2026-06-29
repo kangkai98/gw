@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+ai_gateway_demo.db
+uploads/
+captures/
+
+.tmp*/
+*.log
+
+.pytest_cache/
+.mypy_cache/
