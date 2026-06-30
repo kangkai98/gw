@@ -480,7 +480,7 @@ def get_ai_traffic_summary(
         totals = conn.execute(
             f"""
             SELECT
-                COUNT(*) AS total_flows,
+                COUNT(DISTINCT flow_key) AS total_flows,
                 COUNT(DISTINCT user_ip) AS total_users,
                 COALESCE(SUM(uplink_bytes), 0) AS total_uplink_ai_bytes,
                 COALESCE(SUM(downlink_bytes), 0) AS total_downlink_ai_bytes,
@@ -495,7 +495,7 @@ def get_ai_traffic_summary(
             f"""
             SELECT
                 app,
-                COUNT(*) AS flow_count,
+                COUNT(DISTINCT flow_key) AS flow_count,
                 COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
                 COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
                 COALESCE(SUM(total_bytes), 0) AS total_bytes
@@ -527,7 +527,7 @@ def get_ai_traffic_summary(
             f"""
             SELECT
                 substr(start_time_real, 1, 16) AS label,
-                COUNT(*) AS flow_count,
+                COUNT(DISTINCT flow_key) AS flow_count,
                 COALESCE(SUM(uplink_bytes), 0) AS uplink_bytes,
                 COALESCE(SUM(downlink_bytes), 0) AS downlink_bytes,
                 COALESCE(SUM(total_bytes), 0) AS total_bytes

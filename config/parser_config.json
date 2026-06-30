@@ -1,5 +1,5 @@
 {
-  "TOKEN_LOG_ENABLE": true,
+  "TOKEN_LOG_ENABLE": false,
   "TOKEN_LOG_PATH": "uploads/token_calc.log",
   "MIN_GO_RUN": 10,
   "MIN_ROUNDTRIPS": 30,

@@ -13,10 +13,10 @@
   <aside class="sidebar-fixed glass">
     <h2>导航</h2>
     <nav class="side-nav">
-      <a href="/" class="{% if page == 'home' %}active{% endif %}">主页</a>
+      <a href="/monitor" class="{% if page == 'monitor' %}active{% endif %}">开始</a>
+      <a href="/ai-traffic" class="{% if page == 'ai_traffic' %}active{% endif %}">AI应用流量</a>
+      <a href="/" class="{% if page == 'home' %}active{% endif %}">推理请求体验</a>
       <a href="/config" class="{% if page == 'config' %}active{% endif %}">配置</a>
-      <a href="/ai-traffic" class="{% if page == 'ai_traffic' %}active{% endif %}">AI流量</a>
-      <a href="/records" class="{% if page == 'records' %}active{% endif %}">详细记录</a>
       <a href="/probe" class="{% if page == 'probe' %}active{% endif %}">拨测</a>
     </nav>
   </aside>
@@ -29,7 +29,7 @@
       </div>
       <div class="hero-note">
         <span class="badge">Network-side AI Gateway</span>
-        <span class="hero-tip">页面分为主页、配置、AI流量、详细记录、拨测，便于按角色查看。</span>
+        <span class="hero-tip">页面分为开始、AI应用流量、推理请求体验、配置和拨测。</span>
       </div>
     </header>
 
@@ -58,6 +58,23 @@
             <option value="实验AI">实验AI</option>
           </select>
         </label>
+        <label class="filter-item">
+          <span>模型</span>
+          <input id="qMinor" placeholder="如 千问" />
+        </label>
+        <label class="filter-item"><span>用户IP</span><input id="qUserIp" placeholder="如 10.136.136.222" /></label>
+        <label class="filter-item"><span>用户Port</span><input id="qUserPort" placeholder="如 62081" /></label>
+        <label class="filter-item"><span>服务IP</span><input id="qServerIp" placeholder="如 172.18.94.109" /></label>
+        <label class="filter-item"><span>服务Port</span><input id="qServerPort" placeholder="如 8080" /></label>
+        <label class="filter-item">
+          <span>健康状态</span>
+          <select id="qHealth">
+            <option value="">全部状态</option>
+            <option value="green">健康</option>
+            <option value="yellow">关注</option>
+            <option value="red">告警</option>
+          </select>
+        </label>
         <button type="submit" aria-label="应用筛选" class="filter-btn">应用筛选</button>
         <button type="button" id="resetFilter" class="filter-btn ghost-btn" aria-label="重置筛选">重置</button>
       </form>
@@ -65,17 +82,13 @@
 
     <section class="cards cards-8 centered-cards">
       <article class="stat glass"><h3>总 Request 数</h3><p id="totalEntries">0</p><small>全部请求规模</small></article>
+      <article class="stat glass"><h3>流数</h3><p id="totalFlowCount">0</p><small>五元组去重</small></article>
+      <article class="stat glass"><h3>模型数</h3><p id="totalModelCount">0</p><small>小类去重</small></article>
+      <article class="stat glass"><h3>用户数</h3><p id="totalUserCount">0</p><small>用户 IP 去重</small></article>
       <article class="stat glass"><h3>RPS</h3><p id="rps">0.0</p><small>实时请求速率</small></article>
-      <article class="stat glass"><h3>总输入 Token</h3><p id="totalInput" class="estimated-token-value">0</p><small>输入 token 总量</small></article>
-      <article class="stat glass"><h3>总输出 Token</h3><p id="totalOutput" class="estimated-token-value">0</p><small>输出 token 总量</small></article>
-      <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
       <article class="stat glass"><h3>平均 TTFT(ms)</h3><p id="avgTtft">0.0</p><small>首 token 平均耗时</small></article>
       <article class="stat glass"><h3>平均 TPOT(ms/token)</h3><p id="avgTpot">0.0</p><small>单 token 生成耗时</small></article>
-      <article class="stat glass"><h3>热门 AI 小类</h3><p id="topMinor">-</p><small>按请求量排名第一</small></article>
-      <article class="stat glass"><h3>上行总流量</h3><p id="totalUplinkBytes">0 B</p><small>上传 + 在线累计</small></article>
-      <article class="stat glass"><h3>下行总流量</h3><p id="totalDownlinkBytes">0 B</p><small>上传 + 在线累计</small></article>
-      <article class="stat glass"><h3>上行 AI 流量</h3><p id="totalUplinkAiBytes">0 B</p><small>AI 流上行累计</small></article>
-      <article class="stat glass"><h3>下行 AI 流量</h3><p id="totalDownlinkAiBytes">0 B</p><small>AI 流下行累计</small></article>
+      <article class="stat glass"><h3>平均 Duration(s)</h3><p id="avgDuration">0.0</p><small>端到端平均时长</small></article>
     </section>
 
     <h3 class="row-tag">统计</h3>
@@ -125,6 +138,26 @@
         <canvas id="tpotTrend"></canvas>
       </section>
     </section>
+
+    <section class="glass panel" id="records">
+      <div class="panel-head">
+        <h2>Request 列表</h2>
+        <div class="status-legend">
+          <span class="status-pill"><i class="light green"></i>健康</span>
+          <span class="status-pill"><i class="light yellow"></i>关注</span>
+          <span class="status-pill"><i class="light red"></i>告警</span>
+        </div>
+      </div>
+      <table id="entryTable">
+        <thead>
+          <tr>
+            <th>ID</th><th>开始时间(真实)</th><th>相对开始时间(s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
+            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
     {% endif %}
 
     {% if page == 'ai_traffic' %}
@@ -162,7 +195,7 @@
       <article class="stat glass"><h3>总下行流量</h3><p id="aiTrafficTotalDown">0 B</p><small>当前筛选范围</small></article>
       <article class="stat glass"><h3>AI上行流量</h3><p id="aiTrafficAiUp">0 B</p><small>SNI命中应用</small></article>
       <article class="stat glass"><h3>AI下行流量</h3><p id="aiTrafficAiDown">0 B</p><small>SNI命中应用</small></article>
-      <article class="stat glass"><h3>AI流数</h3><p id="aiTrafficFlowCount">0</p><small>按五元组聚合</small></article>
+      <article class="stat glass"><h3>AI流数</h3><p id="aiTrafficFlowCount">0</p><small>去重后的AI流</small></article>
       <article class="stat glass"><h3>用户数</h3><p id="aiTrafficUserCount">0</p><small>去重用户IP</small></article>
       <article class="stat glass"><h3>上行峰值速率</h3><p id="aiTrafficUplinkPeakRate">0 bps</p><small>整体1秒桶峰值</small></article>
       <article class="stat glass"><h3>下行峰值速率</h3><p id="aiTrafficDownlinkPeakRate">0 bps</p><small>整体1秒桶峰值</small></article>
@@ -188,7 +221,7 @@
         <table id="aiFlowTable">
           <thead>
             <tr>
-              <th>ID</th><th>应用</th><th>SNI</th><th>五元组</th><th>用户</th><th>服务端</th>
+              <th>ID</th><th>应用</th><th>SNI</th><th>用户</th><th>服务端</th>
               <th>上行</th><th>下行</th><th>总量</th><th>持续时间</th><th>开始时间</th><th>结束时间</th>
             </tr>
           </thead>
@@ -198,7 +231,7 @@
     </section>
     {% endif %}
 
-    {% if page == 'config' %}
+    {% if page == 'monitor' %}
     <section class="config-grid">
       <section class="glass panel" id="onlineCapturePanel">
         <h2>在线监听</h2>
@@ -257,7 +290,11 @@
           </div>
         </form>
       </section>
+    </section>
+    {% endif %}
 
+    {% if page == 'config' %}
+    <section class="config-grid">
       <section class="glass panel" id="selfHostedPanel">
         <h2>自建AI配置</h2>
         <form id="cfgForm" class="inline-config-form panel-content-gap">
@@ -404,79 +441,6 @@
         <div class="panel-head"><h2>拨测统计图</h2><span class="subtle">单图展示成功和失败拨测，柱高为端到端时延</span></div>
         <div id="probeTrendCharts" class="probe-chart-grid"></div>
       </section>
-    </section>
-    {% endif %}
-
-    {% if page == 'records' %}
-    <section class="glass panel">
-      <div class="panel-head">
-        <h2>查询条件</h2>
-        <span class="subtle">支持大类/模型/四元组/健康状态组合筛选。</span>
-      </div>
-      <form id="detailQueryForm" class="query-form">
-        <label class="filter-item">
-          <span>大类</span>
-          <select id="qMajor">
-            <option value="">全部大类</option>
-            <option value="三方AI">三方AI</option>
-            <option value="自建AI">自建AI</option>
-            <option value="实验AI">实验AI</option>
-          </select>
-        </label>
-        <label class="filter-item">
-          <span>模型</span>
-          <input id="qMinor" placeholder="如 千问" />
-        </label>
-        <label class="filter-item"><span>用户IP</span><input id="qUserIp" placeholder="如 10.136.136.222" /></label>
-        <label class="filter-item"><span>用户Port</span><input id="qUserPort" placeholder="如 62081" /></label>
-        <label class="filter-item"><span>服务IP</span><input id="qServerIp" placeholder="如 172.18.94.109" /></label>
-        <label class="filter-item"><span>服务Port</span><input id="qServerPort" placeholder="如 8080" /></label>
-        <label class="filter-item">
-          <span>健康状态</span>
-          <select id="qHealth">
-            <option value="">全部状态</option>
-            <option value="green">健康</option>
-            <option value="yellow">关注</option>
-            <option value="red">告警</option>
-          </select>
-        </label>
-        <div class="actions"><button type="submit">执行查询</button><button id="resetDetailQuery" type="button" class="ghost-btn">重置</button></div>
-      </form>
-    </section>
-    <section class="glass panel chart-panel chart-panel-compact query-kpi-panel">
-      <div class="panel-head"><h2>命中统计</h2><span class="subtle">单行展示</span></div>
-      <div class="query-kpis query-kpis-row">
-        <div><strong id="queryHitCount">0</strong><small>命中请求</small></div>
-        <div><strong id="queryFlowCount">0</strong><small>流数(五元组)</small></div>
-        <div><strong id="queryUserCount">0</strong><small>用户数</small></div>
-        <div><strong id="queryModelCount">0</strong><small>模型数</small></div>
-        <div><strong id="queryAvgTtft">0.0</strong><small>平均TTFT(ms)</small></div>
-        <div><strong id="queryAvgDuration">0.0</strong><small>平均Duration(s)</small></div>
-      </div>
-    </section>
-    <section class="query-charts-stack">
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>Request趋势</h2><span class="subtle">TOP3热度模型按分钟聚合求和</span></div><canvas id="queryCountLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>TTFT趋势</h2><span class="subtle">按秒聚合TTFT曲线（仅统计实际AI流）</span></div><canvas id="queryTtftLine"></canvas></section>
-      <section class="glass panel chart-panel"><div class="panel-head"><h2>模型请求量 Top10</h2><span class="subtle">按请求次数降序</span></div><canvas id="queryTopModelBar"></canvas></section>
-    </section>
-    <section class="glass panel" id="records">
-      <div class="panel-head">
-        <h2>Request 列表</h2>
-        <div class="status-legend">
-          <span class="status-pill"><i class="light green"></i>健康</span>
-          <span class="status-pill"><i class="light yellow"></i>关注</span>
-          <span class="status-pill"><i class="light red"></i>告警</span>
-        </div>
-      </div>
-      <table id="entryTable">
-        <thead>
-          <tr>
-            <th>ID</th><th>开始时间(真实)</th><th>相对开始时间(s)</th><th>Duration(s)</th><th>大类</th><th>小类</th><th>流IP:Port</th>
-            <th>TTFB(ms)</th><th>TTFT(ms)</th><th>TPOT(ms/token)</th><th>输入</th><th>输出</th><th>状态</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
     </section>
     {% endif %}
 
@@ -820,7 +784,6 @@
           }),
         });
       }
-
       if (has('aiFlowTable')) {
         const tbody = $('aiFlowTable').querySelector('tbody');
         tbody.innerHTML = (flows || []).map(flow => `
@@ -828,7 +791,6 @@
             <td>${esc(flow.id)}</td>
             <td>${esc(flow.app)}</td>
             <td>${esc(flow.sni)}</td>
-            <td>${esc(flow.protocol || 'TCP')} | ${esc(flow.flow_key)}</td>
             <td>${esc(flow.user_ip)}:${esc(flow.user_port)}</td>
             <td>${esc(flow.server_ip)}:${esc(flow.server_port)}</td>
             <td>${bytes(flow.uplink_bytes)}</td>
@@ -838,7 +800,7 @@
             <td>${esc(flow.start_time_real)}</td>
             <td>${esc(flow.end_time_real)}</td>
           </tr>
-        `).join('') || '<tr><td colspan="12" class="subtle">暂无符合四类 AI 应用 SNI 的流量记录</td></tr>';
+        `).join('') || '<tr><td colspan="11" class="subtle">暂无符合四类 AI 应用 SNI 的流量记录</td></tr>';
       }
     }
 
@@ -886,10 +848,10 @@
     }
 
     function applyDetailFilters(entries) {
-      const majorVal = has('qMajor') ? String($('qMajor').value || '').trim() : '';
+      const majorVal = has('qMajor') ? String($('qMajor').value || '').trim() : (has('majorFilter') ? String($('majorFilter').value || '').trim() : '');
       const minorVal = has('qMinor') ? String($('qMinor').value || '').trim().toLowerCase() : '';
-      const startReal = has('qStartReal') ? toServerTime($('qStartReal').value) : '';
-      const endReal = has('qEndReal') ? toServerTime($('qEndReal').value) : '';
+      const startReal = has('qStartReal') ? toServerTime($('qStartReal').value) : (has('startReal') ? toServerTime($('startReal').value) : '');
+      const endReal = has('qEndReal') ? toServerTime($('qEndReal').value) : (has('endReal') ? toServerTime($('endReal').value) : '');
       const userIpVal = has('qUserIp') ? String($('qUserIp').value || '').trim() : '';
       const userPortVal = has('qUserPort') ? String($('qUserPort').value || '').trim() : '';
       const serverIpVal = has('qServerIp') ? String($('qServerIp').value || '').trim() : '';
@@ -951,12 +913,9 @@
         const s = classifyStatus(e);
         return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${s.cls}" title="${s.label}"></i></td></tr>`;
       }).join('');
-      if (has('queryHitCount')) $('queryHitCount').textContent = String(rows.length);
-      if (has('queryAvgTtft')) $('queryAvgTtft').textContent = num1(avg(rows.map(r => Number(r.ttft_ms || 0))));
-      if (has('queryAvgDuration')) $('queryAvgDuration').textContent = num1(avg(rows.map(r => Number(r.latency_ms || 0) / 1000)));
-      if (has('queryUserCount')) $('queryUserCount').textContent = String(new Set(rows.map(r => parseFlow(r.flow_key).userIp).filter(Boolean)).size);
-      if (has('queryModelCount')) $('queryModelCount').textContent = String(new Set(rows.map(r => String(r.category_minor || '').trim()).filter(Boolean)).size);
-      if (has('queryFlowCount')) $('queryFlowCount').textContent = String(new Set(rows.map(r => `TCP|${r.flow_key}`)).size);
+      if (has('totalUserCount')) $('totalUserCount').textContent = String(new Set(rows.map(r => parseFlow(r.flow_key).userIp).filter(Boolean)).size);
+      if (has('totalModelCount')) $('totalModelCount').textContent = String(new Set(rows.map(r => String(r.category_minor || '').trim()).filter(Boolean)).size);
+      if (has('totalFlowCount')) $('totalFlowCount').textContent = String(new Set(rows.map(r => `TCP|${r.flow_key}`)).size);
 
       if (has('queryCountLine')) {
         charts.queryCountLine?.destroy?.();
@@ -1095,20 +1054,7 @@
       renderCaptureStatus(capture);
 
       if (has('totalEntries')) $('totalEntries').textContent = stats.total_entries ?? 0;
-      if (has('totalInput')) $('totalInput').textContent = compact(stats.total_input_tokens);
-      if (has('totalOutput')) $('totalOutput').textContent = compact(stats.total_output_tokens);
       if (has('rps')) $('rps').textContent = num1(stats.rps);
-      if (has('totalUplinkBytes')) $('totalUplinkBytes').textContent = bytes(stats.total_uplink_bytes);
-      if (has('totalDownlinkBytes')) $('totalDownlinkBytes').textContent = bytes(stats.total_downlink_bytes);
-      if (has('totalUplinkAiBytes')) $('totalUplinkAiBytes').textContent = bytes(stats.total_uplink_ai_bytes);
-      if (has('totalDownlinkAiBytes')) $('totalDownlinkAiBytes').textContent = bytes(stats.total_downlink_ai_bytes);
-
-      if (has('entryTable')) {
-        document.querySelector('#entryTable tbody').innerHTML = entries.map(e => {
-          const statusInfo = classifyStatus(e);
-          return `\n<tr><td>${e.id}</td><td>${e.start_time_real}</td><td>${num6(e.start_time_rel_s)}</td><td>${num1((e.latency_ms || 0) / 1000)}</td><td>${e.category_major}</td><td>${e.category_minor}</td><td>${flowIps(e.flow_key)}</td><td>${num1(e.ttfb_ms)}</td><td>${num1(e.ttft_ms)}</td><td>${num1(e.tpot_ms_per_token)}</td><td>${e.input_tokens}</td><td>${e.output_tokens}</td><td><i class="light ${statusInfo.cls}" title="${statusInfo.label}"></i></td></tr>`;
-        }).join('');
-      }
 
       if (has('cfgTable')) {
         document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td>${c.server_port}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
@@ -1123,6 +1069,7 @@
 
       document.querySelectorAll('[data-del]').forEach(btn => { btn.onclick = async () => { await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' }); await refreshAll(); }; });
       drawCharts(stats.major_stats || [], stats, entries);
+      drawDetailQuery(entries);
     }
 
     async function checkConnectivity(target) {
@@ -1246,7 +1193,13 @@
       await refreshAll();
     };
     if (has('filterForm')) $('filterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAll(); };
-    if (has('resetFilter')) $('resetFilter').onclick = async () => { $('startReal').value = ''; $('endReal').value = ''; $('majorFilter').value = ''; await refreshAll(); };
+    if (has('resetFilter')) $('resetFilter').onclick = async () => {
+      $('startReal').value = '';
+      $('endReal').value = '';
+      $('majorFilter').value = '';
+      ['qMinor', 'qUserIp', 'qUserPort', 'qServerIp', 'qServerPort', 'qHealth'].forEach((id) => { if (has(id)) $(id).value = ''; });
+      await refreshAll();
+    };
 
     async function runLlmProbe(trigger = '单次') {
       const busyKey = 'single';
@@ -1353,21 +1306,6 @@
 
     }
 
-    if (has('detailQueryForm')) {
-      const queryRun = async () => {
-        const q = new URLSearchParams();
-        if (has('qMajor') && $('qMajor').value) q.set('category_major', $('qMajor').value);
-        if (has('qMinor') && $('qMinor').value) q.set('category_minor', $('qMinor').value);
-        const qs = q.toString();
-        const resp = await fetch(`/api/entries${qs ? `?${qs}` : ''}`);
-        const allRows = (await resp.json()).items || [];
-        drawDetailQuery(allRows);
-      };
-      $('detailQueryForm').onsubmit = async (e) => { e.preventDefault(); await queryRun(); };
-      if (has('resetDetailQuery')) $('resetDetailQuery').onclick = async () => { $('qMajor').value = ''; $('qMinor').value = ''; $('qUserIp').value = ''; $('qUserPort').value = ''; $('qServerIp').value = ''; $('qServerPort').value = ''; $('qHealth').value = ''; await queryRun(); };
-      queryRun();
-    }
-
     if (has('aiTrafficFilterForm')) {
       $('aiTrafficFilterForm').onsubmit = async (e) => { e.preventDefault(); await refreshAiTraffic(); };
       if (has('resetAiTrafficFilter')) $('resetAiTrafficFilter').onclick = async () => {
@@ -1411,7 +1349,7 @@
         }
       }, 15000);
     }
-    if (['home', 'config'].includes(document.body.dataset.page || '')) {
+    if (['home', 'config', 'monitor'].includes(document.body.dataset.page || '')) {
       refreshAll();
       window.setInterval(async () => {
         try {

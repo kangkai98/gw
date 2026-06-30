@@ -114,7 +114,11 @@ class TrafficPacket:
         return f"{self.dst}:{self.dport}"
 
 
-def analyze_ai_traffic_pcap(pcap_path: Path, source: str = "unknown") -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
+def analyze_ai_traffic_pcap(
+    pcap_path: Path,
+    source: str = "unknown",
+    flow_context: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     packets = _extract_packets(pcap_path)
     summary = {
         "pcap_path": str(pcap_path),
@@ -138,12 +142,23 @@ def analyze_ai_traffic_pcap(pcap_path: Path, source: str = "unknown") -> tuple[l
             continue
 
         sni, client_endpoint = _detect_flow_sni_and_client(ordered)
+        app = _app_for_sni(sni)
+        if app and flow_context is not None:
+            flow_context[canonical_key] = {
+                "app": app,
+                "sni": sni or "",
+                "client_endpoint": client_endpoint or "",
+            }
+        if not app and flow_context is not None:
+            context = flow_context.get(canonical_key) or {}
+            app = context.get("app") or None
+            sni = context.get("sni") or sni
+            client_endpoint = context.get("client_endpoint") or client_endpoint
         user_endpoint, server_endpoint = _infer_direction(endpoints, client_endpoint)
         uplink, downlink = _directional_bytes(ordered, user_endpoint)
         summary["uplink_total_bytes"] += uplink
         summary["downlink_total_bytes"] += downlink
 
-        app = _app_for_sni(sni)
         if not app:
             continue
 

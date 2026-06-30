@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlparse
 import urllib.request
 
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -535,14 +535,19 @@ def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "home"})
 
 
+@app.get("/monitor", response_class=HTMLResponse)
+def monitor_page(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request, "page": "monitor"})
+
+
 @app.get("/config", response_class=HTMLResponse)
 def config_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request, "page": "config"})
 
 
-@app.get("/records", response_class=HTMLResponse)
+@app.get("/records")
 def records_page(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "page": "records"})
+    return RedirectResponse(url="/", status_code=307)
 
 
 @app.get("/ai-traffic", response_class=HTMLResponse)

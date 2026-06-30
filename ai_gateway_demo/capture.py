@@ -165,6 +165,7 @@ class OnlineCaptureManager:
     _status: CaptureStatus = field(default_factory=CaptureStatus, init=False)
     _flow_cache: dict[str, list[CachedTcpPacket]] = field(default_factory=dict, init=False)
     _flow_third_party_cache: dict[str, tuple[str, float]] = field(default_factory=dict, init=False)
+    _ai_flow_context_cache: dict[str, tuple[str, str, str, float]] = field(default_factory=dict, init=False)
     _next_packet_seq: int = field(default=0, init=False)
     _capture_backend: str = field(default="", init=False)
     _run_started_at: float = field(default=0.0, init=False)
@@ -248,6 +249,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             self._capture_backend = backend
             now = _now_text()
@@ -326,6 +328,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             self._run_started_at = time.time()
             now = _now_text()
@@ -403,6 +406,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -480,6 +484,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -557,6 +562,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -634,6 +640,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -711,6 +718,7 @@ class OnlineCaptureManager:
             self._stop_event.clear()
             self._flow_cache.clear()
             self._flow_third_party_cache.clear()
+            self._ai_flow_context_cache.clear()
             self._next_packet_seq = 0
             now = _now_text()
             self._status = CaptureStatus(
@@ -1066,7 +1074,11 @@ class OnlineCaptureManager:
         analysis_started = time.perf_counter()
         configs = list_self_hosted()
         entries, traffic_summary = _parse_ready_pcap_in_process(analyzed_pcap, configs, self._stop_event)
-        ai_flow_records, ai_traffic_summary, ai_rate_buckets = analyze_ai_traffic_pcap(analyzed_pcap, source="online")
+        ai_flow_context = self._active_ai_flow_context()
+        ai_flow_records, ai_traffic_summary, ai_rate_buckets = analyze_ai_traffic_pcap(
+            analyzed_pcap, source="online", flow_context=ai_flow_context
+        )
+        self._remember_ai_flow_context_from_records(ai_flow_records)
         parser_ai_traffic = summarize_parser_detected_ai_traffic(analyzed_pcap, entries)
         insert_traffic_summary({**traffic_summary, **ai_traffic_summary, **parser_ai_traffic, "source": "online"})
         insert_ai_flow_records(ai_flow_records)
@@ -1091,6 +1103,7 @@ class OnlineCaptureManager:
             analysis_file_size = 0
         if analysis_file_size == 0:
             analysis_file_size = self._last_analyzed_pcap_size_bytes
+        self._forget_finished_flow_contexts(analyzed_pcap)
         deleted_pcaps = 0
         if pcap_retention_sec == 0 and _delete_file(analyzed_pcap):
             deleted_pcaps += 1
@@ -1153,6 +1166,48 @@ class OnlineCaptureManager:
         patched["category_major"] = "三方AI"
         patched["category_minor"] = minor
         return patched
+
+    def _active_ai_flow_context(self) -> dict[str, dict[str, str]]:
+        now = time.time()
+        with self._lock:
+            expired = [key for key, (_, _, _, expires_at) in self._ai_flow_context_cache.items() if expires_at <= now]
+            for key in expired:
+                self._ai_flow_context_cache.pop(key, None)
+            return {
+                key: {"app": app, "sni": sni, "client_endpoint": client_endpoint}
+                for key, (app, sni, client_endpoint, _) in self._ai_flow_context_cache.items()
+            }
+
+    def _remember_ai_flow_context_from_records(self, records: list[dict[str, Any]]) -> None:
+        if not records:
+            return
+        expires_at = time.time() + THIRD_PARTY_SNI_CACHE_TTL_SEC
+        with self._lock:
+            for record in records:
+                flow_key = str(record.get("flow_key") or "")
+                app = str(record.get("app") or "")
+                sni = str(record.get("sni") or "")
+                user_ip = str(record.get("user_ip") or "")
+                user_port = int(record.get("user_port") or 0)
+                if not flow_key or not app or not user_ip or user_port <= 0:
+                    continue
+                cache_key = _normalize_flow_key(flow_key)
+                self._ai_flow_context_cache[cache_key] = (app, sni, f"{user_ip}:{user_port}", expires_at)
+
+    def _forget_finished_flow_contexts(self, pcap_path: Path) -> None:
+        if not pcap_path.exists():
+            return
+        finished_keys = {
+            _normalize_flow_key(packet.flow_key)
+            for packet in _extract_cached_tcp_packets(pcap_path)
+            if packet.tcp_flags & 0x05
+        }
+        if not finished_keys:
+            return
+        with self._lock:
+            for key in finished_keys:
+                self._flow_third_party_cache.pop(key, None)
+                self._ai_flow_context_cache.pop(key, None)
 
     def _capture_one_window(self, interface: str, interval_sec: int, bpf_filter: str, file_path: Path, mode: str = "linux") -> None:
         if mode == "windows":
