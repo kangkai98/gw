@@ -963,10 +963,22 @@
       }
     }
 
-    function drawCharts(rows, stats, entries) {
+    function entriesRps(entries) {
+      const rows = entries || [];
+      if (!rows.length) return 0;
+      const minStart = Math.min(...rows.map(e => Number(e.start_time_rel_s || 0)));
+      const maxEnd = Math.max(...rows.map(e => Number(e.start_time_rel_s || 0) + Number(e.latency_ms || 0) / 1000));
+      const duration = maxEnd - minStart;
+      return duration > 0 ? rows.length / duration : 0;
+    }
+
+    function drawCharts(entries) {
       destroyAllCharts();
-      const labels = rows.map(r => r.category_major);
-      const counts = rows.map(r => r.total_entries);
+      const majorRows = Array.from(groupBy(entries || [], e => e.category_major || '未知').entries())
+        .map(([category_major, list]) => ({ category_major, total_entries: list.length }))
+        .sort((a, b) => b.total_entries - a.total_entries);
+      const labels = majorRows.map(r => r.category_major);
+      const counts = majorRows.map(r => r.total_entries);
       const derived = buildDerived(entries);
       const minuteLabels = derived.minuteSeries.map(i => i.label);
 
@@ -1051,10 +1063,11 @@
       const entries = (await entriesResp.json()).items || [];
       const cfgs = (await cfgResp.json()).items || [];
       const capture = await captureResp.json();
+      const filteredEntries = applyDetailFilters(entries);
       renderCaptureStatus(capture);
 
-      if (has('totalEntries')) $('totalEntries').textContent = stats.total_entries ?? 0;
-      if (has('rps')) $('rps').textContent = num1(stats.rps);
+      if (has('totalEntries')) $('totalEntries').textContent = filteredEntries.length;
+      if (has('rps')) $('rps').textContent = num1(entriesRps(filteredEntries));
 
       if (has('cfgTable')) {
         document.querySelector('#cfgTable tbody').innerHTML = cfgs.map(c => `\n<tr><td>${c.id}</td><td>${c.name}</td><td>${c.server_ip}</td><td>${c.server_port}</td><td><button aria-label="删除配置" data-del="${c.id}" class="ghost-btn">删除</button></td></tr>`).join('');
@@ -1068,8 +1081,8 @@
       }
 
       document.querySelectorAll('[data-del]').forEach(btn => { btn.onclick = async () => { await fetch(`/api/self-hosted/${btn.dataset.del}`, { method: 'DELETE' }); await refreshAll(); }; });
-      drawCharts(stats.major_stats || [], stats, entries);
-      drawDetailQuery(entries);
+      drawCharts(filteredEntries);
+      drawDetailQuery(filteredEntries);
     }
 
     async function checkConnectivity(target) {
